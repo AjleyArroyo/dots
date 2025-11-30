@@ -22,42 +22,68 @@ if ($resPaciente->num_rows == 0) {
 }
 $paciente = $resPaciente->fetch_assoc();
 
-// Obtener información del gabinete asignado
+// Obtener gabinete
 $sqlGabinete = "SELECT nombre, sensor_temp_id, sensor_hum_id FROM gabinete WHERE gabinete_id = " . $paciente['gabinete_id'];
 $resGabinete = $con->query($sqlGabinete);
 $gabinete = $resGabinete->fetch_assoc();
 
-// Obtener dispensaciones del paciente
-$sqlDisp = "SELECT d.*, m.nombre AS medicamentonombre, m.dosis_sugerida 
-            FROM dispensacionprogramada d 
-            JOIN medicine m ON d.medicamento_id = m.medicine_id 
-            WHERE d.paciente_id = $paciente_id 
-            ORDER BY d.fecha DESC, d.hora DESC
-            LIMIT 10";
-$resDisp = $con->query($sqlDisp);
+// Obtener historial de mediciones para gráficas
+$sqlMediciones = "SELECT peso, saturacion, DATE_FORMAT(fecha_medicion, '%d/%m') as fecha 
+                  FROM historial_mediciones 
+                  WHERE paciente_id = $paciente_id 
+                  ORDER BY fecha_medicion ASC 
+                  LIMIT 20";
+$resMediciones = $con->query($sqlMediciones);
+$mediciones = [];
+while($m = $resMediciones->fetch_assoc()) {
+    $mediciones[] = $m;
+}
 
-// Contar dispensaciones
-$sqlStats = "SELECT 
-    COUNT(*) as total,
-    SUM(CASE WHEN estado = 'Completed' THEN 1 ELSE 0 END) as completadas,
-    SUM(CASE WHEN estado = 'Pending' THEN 1 ELSE 0 END) as pendientes
-    FROM dispensacionprogramada 
-    WHERE paciente_id = $paciente_id";
-$resStats = $con->query($sqlStats);
-$stats = $resStats->fetch_assoc();
+// Obtener consultas
+$sqlConsultas = "SELECT c.*, m.nombre as medico_nombre 
+                 FROM consultas c 
+                 LEFT JOIN mepersonel m ON c.me_personel_id = m.id 
+                 WHERE c.paciente_id = $paciente_id 
+                 ORDER BY c.fecha_consulta DESC 
+                 LIMIT 10";
+$resConsultas = $con->query($sqlConsultas);
+
+// Obtener recetas pendientes
+$sqlRecetas = "SELECT r.*, m.nombre as medico_nombre 
+               FROM recetas r 
+               LEFT JOIN mepersonel m ON r.me_personel_id = m.id 
+               WHERE r.paciente_id = $paciente_id 
+               ORDER BY r.fecha_emision DESC 
+               LIMIT 10";
+$resRecetas = $con->query($sqlRecetas);
+
+// Obtener alertas
+$sqlAlertas = "SELECT * FROM alertas_paciente 
+               WHERE paciente_id = $paciente_id 
+               ORDER BY created_at DESC 
+               LIMIT 10";
+$resAlertas = $con->query($sqlAlertas);
+
+// Preparar datos para gráficas
+$labels = [];
+$pesos = [];
+$saturaciones = [];
+foreach($mediciones as $med) {
+    $labels[] = $med['fecha'];
+    $pesos[] = $med['peso'];
+    $saturaciones[] = $med['saturacion'];
+}
 ?>
 <!DOCTYPE html>
 <html lang="es">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="refresh" content="300">
   <title>Perfil del Paciente - DOTS</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@3.9.1/dist/chart.min.js"></script>
   <style>
-    * {
-      margin: 0;
-      padding: 0;
-      box-sizing: border-box;
-    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
 
     body {
       font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
@@ -66,12 +92,8 @@ $stats = $resStats->fetch_assoc();
       padding: 20px;
     }
 
-    .container {
-      max-width: 1400px;
-      margin: 0 auto;
-    }
+    .container { max-width: 1600px; margin: 0 auto; }
 
-    /* Header */
     .header {
       background: rgba(255, 255, 255, 0.95);
       backdrop-filter: blur(10px);
@@ -86,22 +108,10 @@ $stats = $resStats->fetch_assoc();
       gap: 15px;
     }
 
-    .header-info h1 {
-      color: #667eea;
-      font-size: 28px;
-      margin-bottom: 5px;
-    }
+    .header h1 { color: #667eea; font-size: 28px; }
+    .header p { color: #6c757d; font-size: 14px; }
 
-    .header-info p {
-      color: #6c757d;
-      font-size: 14px;
-    }
-
-    .header-actions {
-      display: flex;
-      gap: 10px;
-      flex-wrap: wrap;
-    }
+    .header-actions { display: flex; gap: 10px; flex-wrap: wrap; }
 
     .btn {
       padding: 12px 20px;
@@ -117,36 +127,18 @@ $stats = $resStats->fetch_assoc();
       font-size: 14px;
     }
 
-    .btn-primary {
-      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-      color: white;
-    }
+    .btn-primary { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; }
+    .btn-secondary { background: white; color: #667eea; border: 2px solid #667eea; }
+    .btn-success { background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%); color: white; }
+    .btn:hover { transform: translateY(-2px); box-shadow: 0 5px 15px rgba(0, 0, 0, 0.2); }
 
-    .btn-secondary {
-      background: white;
-      color: #667eea;
-      border: 2px solid #667eea;
-    }
-
-    .btn-success {
-      background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%);
-      color: white;
-    }
-
-    .btn:hover {
-      transform: translateY(-2px);
-      box-shadow: 0 5px 15px rgba(0, 0, 0, 0.2);
-    }
-
-    /* Grid Layout */
     .content-grid {
       display: grid;
-      grid-template-columns: 1fr 2fr;
+      grid-template-columns: 350px 1fr;
       gap: 25px;
       margin-bottom: 25px;
     }
 
-    /* Card Base */
     .card {
       background: rgba(255, 255, 255, 0.95);
       backdrop-filter: blur(10px);
@@ -164,7 +156,6 @@ $stats = $resStats->fetch_assoc();
       gap: 10px;
     }
 
-    /* Patient Info Card */
     .patient-avatar {
       width: 120px;
       height: 120px;
@@ -179,17 +170,27 @@ $stats = $resStats->fetch_assoc();
       box-shadow: 0 10px 30px rgba(102, 126, 234, 0.3);
     }
 
+    .health-indicator {
+      text-align: center;
+      padding: 15px;
+      border-radius: 15px;
+      margin-bottom: 20px;
+      font-weight: 700;
+      font-size: 16px;
+    }
+
+    .health-mejorando { background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%); color: white; }
+    .health-estable { background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%); color: white; }
+    .health-empeorando { background: linear-gradient(135deg, #fa709a 0%, #fee140 100%); color: white; }
+    .health-nuevo { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; }
+
     .info-group {
       margin-bottom: 20px;
       padding-bottom: 20px;
       border-bottom: 1px solid #eee;
     }
 
-    .info-group:last-child {
-      border-bottom: none;
-      margin-bottom: 0;
-      padding-bottom: 0;
-    }
+    .info-group:last-child { border-bottom: none; margin-bottom: 0; padding-bottom: 0; }
 
     .info-label {
       font-size: 12px;
@@ -197,21 +198,13 @@ $stats = $resStats->fetch_assoc();
       text-transform: uppercase;
       letter-spacing: 0.5px;
       margin-bottom: 5px;
-      display: flex;
-      align-items: center;
-      gap: 5px;
     }
 
-    .info-value {
-      font-size: 16px;
-      color: #333;
-      font-weight: 600;
-    }
+    .info-value { font-size: 16px; color: #333; font-weight: 600; }
 
-    /* Stats Cards */
     .stats-grid {
       display: grid;
-      grid-template-columns: repeat(3, 1fr);
+      grid-template-columns: repeat(2, 1fr);
       gap: 15px;
       margin-bottom: 25px;
     }
@@ -224,90 +217,63 @@ $stats = $resStats->fetch_assoc();
       text-align: center;
     }
 
-    .stat-card.success {
-      background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%);
-    }
+    .stat-number { font-size: 36px; font-weight: 700; margin-bottom: 5px; }
+    .stat-label { font-size: 12px; opacity: 0.9; text-transform: uppercase; }
 
-    .stat-card.warning {
-      background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
-    }
-
-    .stat-number {
-      font-size: 36px;
-      font-weight: 700;
-      margin-bottom: 5px;
-    }
-
-    .stat-label {
-      font-size: 12px;
-      opacity: 0.9;
-      text-transform: uppercase;
-      letter-spacing: 0.5px;
-    }
-
-    /* Gabinete Info */
-    .gabinete-info {
-      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-      color: white;
-      padding: 20px;
-      border-radius: 15px;
-      display: flex;
-      justify-content: space-around;
-      align-items: center;
+    .chart-container {
+      position: relative;
+      height: 300px;
       margin-bottom: 25px;
     }
 
-    .gabinete-metric {
-      text-align: center;
+    .tabs {
+      display: flex;
+      gap: 10px;
+      margin-bottom: 20px;
+      border-bottom: 2px solid #e0e0e0;
     }
 
-    .gabinete-metric-value {
-      font-size: 32px;
-      font-weight: 700;
-      margin-bottom: 5px;
+    .tab {
+      padding: 12px 20px;
+      background: transparent;
+      border: none;
+      border-bottom: 3px solid transparent;
+      cursor: pointer;
+      font-weight: 600;
+      color: #6c757d;
+      transition: all 0.3s ease;
     }
 
-    .gabinete-metric-label {
-      font-size: 12px;
-      opacity: 0.9;
+    .tab.active {
+      color: #667eea;
+      border-bottom-color: #667eea;
     }
 
-    /* Table */
+    .tab-content { display: none; }
+    .tab-content.active { display: block; }
+
     table {
       width: 100%;
-      border-collapse: separate;
-      border-spacing: 0;
+      border-collapse: collapse;
     }
 
     th {
-      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-      color: white;
+      background: #f8f9fa;
       padding: 12px;
       text-align: left;
       font-weight: 600;
       font-size: 13px;
-      text-transform: uppercase;
-      letter-spacing: 0.5px;
-    }
-
-    th:first-child {
-      border-radius: 10px 0 0 0;
-    }
-
-    th:last-child {
-      border-radius: 0 10px 0 0;
+      color: #667eea;
+      border-bottom: 2px solid #e0e0e0;
     }
 
     td {
       padding: 12px;
       border-bottom: 1px solid #eee;
       font-size: 14px;
-      color: #333;
     }
 
-    tr:hover {
-      background-color: #f8f9fa;
-    }
+    tr:hover { background: #f8f9fa; }
 
     .badge {
       display: inline-block;
@@ -317,290 +283,295 @@ $stats = $resStats->fetch_assoc();
       font-weight: 600;
     }
 
-    .badge-pending {
-      background: #fff3cd;
-      color: #856404;
-    }
+    .badge-pendiente { background: #fff3cd; color: #856404; }
+    .badge-realizada { background: #d4edda; color: #155724; }
+    .badge-cancelada { background: #f8d7da; color: #721c24; }
+    .badge-noasistio { background: #f8d7da; color: #721c24; }
 
-    .badge-completed {
-      background: #d4edda;
-      color: #155724;
-    }
-
-    .badge-cancelled {
-      background: #f8d7da;
-      color: #721c24;
-    }
-
-    .action-buttons {
-      display: flex;
-      gap: 5px;
-      flex-wrap: wrap;
-    }
-
-    .btn-small {
-      padding: 5px 10px;
-      font-size: 11px;
-      border-radius: 6px;
-      text-decoration: none;
-      display: inline-flex;
-      align-items: center;
-      gap: 5px;
-      transition: all 0.3s ease;
-      border: none;
-      cursor: pointer;
-      font-weight: 600;
-    }
-
-    .btn-edit {
-      background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
-      color: white;
-    }
-
-    .btn-delete {
-      background: linear-gradient(135deg, #fa709a 0%, #fee140 100%);
-      color: white;
-    }
-
-    .btn-view {
-      background: linear-gradient(135deg, #a8edea 0%, #fed6e3 100%);
-      color: #333;
-    }
-
-    .btn-small:hover {
-      transform: translateY(-2px);
-      box-shadow: 0 3px 10px rgba(0, 0, 0, 0.2);
-    }
-
-    .empty-state {
-      text-align: center;
-      padding: 40px 20px;
-      color: #6c757d;
-    }
-
-    @media (max-width: 1024px) {
-      .content-grid {
-        grid-template-columns: 1fr;
-      }
-
-      .stats-grid {
-        grid-template-columns: repeat(3, 1fr);
-      }
+    @media (max-width: 1200px) {
+      .content-grid { grid-template-columns: 1fr; }
+      .stats-grid { grid-template-columns: repeat(2, 1fr); }
     }
 
     @media (max-width: 768px) {
-      .header {
-        flex-direction: column;
-        align-items: flex-start;
-      }
-
-      .header-actions {
-        width: 100%;
-        flex-direction: column;
-      }
-
-      .btn {
-        width: 100%;
-        justify-content: center;
-      }
-
-      .stats-grid {
-        grid-template-columns: 1fr;
-      }
-
-      .gabinete-info {
-        flex-direction: column;
-        gap: 15px;
-      }
-
-      table {
-        font-size: 12px;
-      }
-
-      th, td {
-        padding: 8px 5px;
-      }
-    }
-
-    @keyframes fadeIn {
-      from {
-        opacity: 0;
-        transform: translateY(20px);
-      }
-      to {
-        opacity: 1;
-        transform: translateY(0);
-      }
-    }
-
-    .card {
-      animation: fadeIn 0.5s ease;
+      .stats-grid { grid-template-columns: 1fr; }
     }
   </style>
 </head>
 <body>
 
 <div class="container">
-  <!-- Header -->
   <div class="header">
-    <div class="header-info">
+    <div>
       <h1>👤 Perfil del Paciente</h1>
-      <p>Información detallada y historial de tratamientos</p>
+      <p>Información detallada, historial médico y seguimiento</p>
     </div>
     <div class="header-actions">
-      <a href="pacientes.php" class="btn btn-secondary">
-        ⬅️ Volver a Lista
-      </a>
-      <a href="editar_paciente.php?id=<?= $paciente_id ?>" class="btn btn-primary">
-        ✏️ Editar Paciente
-      </a>
-      <a href="registrar_dispensacion.php?paciente_id=<?= $paciente_id ?>" class="btn btn-success">
-        ➕ Nueva Dispensación
-      </a>
+      <a href="pacientes.php" class="btn btn-secondary">⬅️ Volver</a>
+      <a href="editar_paciente.php?id=<?= $paciente_id ?>" class="btn btn-primary">✏️ Editar</a>
+      <a href="nueva_consulta.php?paciente_id=<?= $paciente_id ?>" class="btn btn-success">➕ Nueva Consulta</a>
     </div>
   </div>
 
-  <!-- Stats Cards -->
-  <div class="stats-grid">
-    <div class="stat-card">
-      <div class="stat-number"><?= $stats['total'] ?></div>
-      <div class="stat-label">Total Dispensaciones</div>
-    </div>
-    <div class="stat-card success">
-      <div class="stat-number"><?= $stats['completadas'] ?></div>
-      <div class="stat-label">Completadas</div>
-    </div>
-    <div class="stat-card warning">
-      <div class="stat-number"><?= $stats['pendientes'] ?></div>
-      <div class="stat-label">Pendientes</div>
-    </div>
-  </div>
-
-  <!-- Content Grid -->
   <div class="content-grid">
-    <!-- Patient Info -->
+    <!-- Información del Paciente -->
     <div class="card">
       <div class="patient-avatar">
         <?= strtoupper(substr($paciente['nombre'], 0, 1) . substr($paciente['apellido'], 0, 1)) ?>
       </div>
       
-      <h2 style="text-align: center; margin-bottom: 30px;">
+      <h2 style="text-align: center; margin-bottom: 20px;">
         <?= htmlspecialchars($paciente['nombre'] . ' ' . $paciente['apellido']) ?>
       </h2>
 
+      <div class="health-indicator health-<?= strtolower($paciente['estado_salud']) ?>">
+        <?php
+        $iconos = [
+            'Mejorando' => '📈 MEJORANDO',
+            'Estable' => '➡️ ESTABLE',
+            'Empeorando' => '📉 EMPEORANDO',
+            'Nuevo' => '🆕 PACIENTE NUEVO'
+        ];
+        echo $iconos[$paciente['estado_salud']] ?? '❓ SIN EVALUAR';
+        ?>
+      </div>
+
       <div class="info-group">
-        <div class="info-label">📧 Correo Electrónico</div>
-        <div class="info-value"><?= htmlspecialchars($paciente['correo']) ?></div>
+        <div class="info-label">📧 Correo</div>
+        <div class="info-value"><?= htmlspecialchars($paciente['correo']) ?: 'No registrado' ?></div>
       </div>
 
       <div class="info-group">
         <div class="info-label">📱 Teléfono</div>
-        <div class="info-value"><?= htmlspecialchars($paciente['telefono']) ?></div>
+        <div class="info-value"><?= htmlspecialchars($paciente['telefono']) ?: 'No registrado' ?></div>
       </div>
 
       <div class="info-group">
-        <div class="info-label">🏢 Gabinete Asignado</div>
+        <div class="info-label">🏢 Gabinete</div>
         <div class="info-value">Gabinete #<?= $paciente['gabinete_id'] ?></div>
       </div>
 
       <div class="info-group">
-        <div class="info-label">👆 ID Huella Digital</div>
+        <div class="info-label">👆 ID Huella</div>
         <div class="info-value">#<?= $paciente['huella_id'] ?></div>
       </div>
 
       <div class="info-group">
-        <div class="info-label">🚨 Contacto de Emergencia 1</div>
-        <div class="info-value"><?= htmlspecialchars($paciente['emergencia1']) ?></div>
+        <div class="info-label">🚨 Emergencia 1</div>
+        <div class="info-value" style="font-size: 14px;"><?= htmlspecialchars($paciente['emergencia1']) ?: 'No registrado' ?></div>
       </div>
 
       <div class="info-group">
-        <div class="info-label">🚨 Contacto de Emergencia 2</div>
-        <div class="info-value"><?= htmlspecialchars($paciente['emergencia2']) ?></div>
+        <div class="info-label">🚨 Emergencia 2</div>
+        <div class="info-value" style="font-size: 14px;"><?= htmlspecialchars($paciente['emergencia2']) ?: 'No registrado' ?></div>
       </div>
     </div>
 
-    <!-- Right Column -->
+    <!-- Contenido Principal -->
     <div>
-      <!-- Gabinete Info -->
-      <?php if ($gabinete): ?>
-      <div class="gabinete-info">
-        <div class="gabinete-metric">
-          <div class="gabinete-metric-value">🏢</div>
-          <div class="gabinete-metric-label"><?= htmlspecialchars($gabinete['nombre']) ?></div>
+      <!-- Mediciones Actuales -->
+      <div class="stats-grid">
+        <div class="stat-card">
+          <div class="stat-number">⚖️ <?= $paciente['peso_actual'] ?? '--' ?></div>
+          <div class="stat-label">Peso Actual (kg)</div>
         </div>
-        <div class="gabinete-metric">
-          <div class="gabinete-metric-value"><?= $gabinete['sensor_temp_id'] ?>°C</div>
-          <div class="gabinete-metric-label">Temperatura</div>
-        </div>
-        <div class="gabinete-metric">
-          <div class="gabinete-metric-value"><?= $gabinete['sensor_hum_id'] ?>%</div>
-          <div class="gabinete-metric-label">Humedad</div>
+        <div class="stat-card">
+          <div class="stat-number">🫀 <?= $paciente['saturacion_actual'] ?? '--' ?></div>
+          <div class="stat-label">Saturación Actual (%)</div>
         </div>
       </div>
-      <?php endif; ?>
 
-      <!-- Dispensations History -->
+      <!-- Gráficas -->
       <div class="card">
-        <h2>📋 Historial de Dispensaciones</h2>
+        <h2>📊 Evolución del Paciente</h2>
         
-        <?php if ($resDisp->num_rows > 0): ?>
-        <table>
-          <thead>
-            <tr>
-              <th>Fecha</th>
-              <th>Hora</th>
-              <th>Medicamento</th>
-              <th>Dosis</th>
-              <th>Estado</th>
-              <th>Acciones</th>
-            </tr>
-          </thead>
-          <tbody>
-            <?php while ($disp = $resDisp->fetch_assoc()): ?>
-            <tr>
-              <td><?= date('d/m/Y', strtotime($disp['fecha'])) ?></td>
-              <td><?= date('H:i', strtotime($disp['hora'])) ?></td>
-              <td><strong><?= htmlspecialchars($disp['medicamentonombre']) ?></strong></td>
-              <td><?= htmlspecialchars($disp['dosis_sugerida']) ?></td>
-              <td>
-                <?php
-                $badgeClass = 'badge-pending';
-                if ($disp['estado'] == 'Completed') $badgeClass = 'badge-completed';
-                if ($disp['estado'] == 'Cancelled') $badgeClass = 'badge-cancelled';
-                ?>
-                <span class="badge <?= $badgeClass ?>">
-                  <?= htmlspecialchars($disp['estado']) ?>
-                </span>
-              </td>
-              <td>
-                <div class="action-buttons">
-                  <a class="btn-small btn-view" href="ver_prescripcion.php?dispensacion_id=<?= $disp['dispensacion_id'] ?>">
-                    📄 Ver
-                  </a>
-                  <a class="btn-small btn-edit" href="editar_dispensacion.php?id=<?= $disp['dispensacion_id'] ?>">
-                    ✏️ Editar
-                  </a>
-                  <a class="btn-small btn-delete" href="eliminar_dispensacion.php?id=<?= $disp['dispensacion_id'] ?>&paciente_id=<?= $paciente_id ?>" onclick="return confirm('¿Eliminar esta dispensación?')">
-                    🗑️
-                  </a>
-                </div>
-              </td>
-            </tr>
-            <?php endwhile; ?>
-          </tbody>
-        </table>
-        <?php else: ?>
-        <div class="empty-state">
-          <p>📋 No hay dispensaciones registradas</p>
-          <a href="registrar_dispensacion.php?paciente_id=<?= $paciente_id ?>" class="btn btn-success" style="margin-top: 15px;">
-            ➕ Registrar Primera Dispensación
-          </a>
+        <div style="margin-bottom: 30px;">
+          <h3 style="color: #667eea; font-size: 16px; margin-bottom: 15px;">Peso (kg)</h3>
+          <div class="chart-container">
+            <canvas id="chartPeso"></canvas>
+          </div>
         </div>
-        <?php endif; ?>
+
+        <div>
+          <h3 style="color: #667eea; font-size: 16px; margin-bottom: 15px;">Saturación (%)</h3>
+          <div class="chart-container">
+            <canvas id="chartSaturacion"></canvas>
+          </div>
+        </div>
+      </div>
+
+      <!-- Tabs -->
+      <div class="card">
+        <div class="tabs">
+          <button class="tab active" onclick="openTab(event, 'consultas')">📋 Consultas</button>
+          <button class="tab" onclick="openTab(event, 'recetas')">💊 Recetas</button>
+          <button class="tab" onclick="openTab(event, 'alertas')">🔔 Alertas</button>
+        </div>
+
+        <!-- Tab Consultas -->
+        <div id="consultas" class="tab-content active">
+          <?php if ($resConsultas->num_rows > 0): ?>
+          <table>
+            <thead>
+              <tr>
+                <th>Fecha</th>
+                <th>Médico</th>
+                <th>Peso</th>
+                <th>Saturación</th>
+                <th>Estado</th>
+                <th>Acciones</th>
+              </tr>
+            </thead>
+            <tbody>
+              <?php while($c = $resConsultas->fetch_assoc()): ?>
+              <tr>
+                <td><?= date('d/m/Y H:i', strtotime($c['fecha_consulta'])) ?></td>
+                <td><?= htmlspecialchars($c['medico_nombre']) ?></td>
+                <td><?= $c['peso'] ?? '-' ?> kg</td>
+                <td><?= $c['saturacion'] ?? '-' ?>%</td>
+                <td><span class="badge badge-<?= strtolower($c['estado']) ?>"><?= $c['estado'] ?></span></td>
+                <td>
+                  <a href="ver_consulta.php?id=<?= $c['consulta_id'] ?>" class="btn btn-primary" style="padding: 5px 10px; font-size: 12px;">Ver</a>
+                </td>
+              </tr>
+              <?php endwhile; ?>
+            </tbody>
+          </table>
+          <?php else: ?>
+          <p style="text-align: center; color: #6c757d; padding: 40px;">No hay consultas registradas</p>
+          <?php endif; ?>
+        </div>
+
+        <!-- Tab Recetas -->
+        <div id="recetas" class="tab-content">
+          <?php if ($resRecetas->num_rows > 0): ?>
+          <table>
+            <thead>
+              <tr>
+                <th>Fecha</th>
+                <th>Tipo</th>
+                <th>Descripción</th>
+                <th>Estado</th>
+                <th>Acciones</th>
+              </tr>
+            </thead>
+            <tbody>
+              <?php while($r = $resRecetas->fetch_assoc()): ?>
+              <tr>
+                <td><?= date('d/m/Y', strtotime($r['fecha_emision'])) ?></td>
+                <td><?= $r['tipo'] ?></td>
+                <td><?= htmlspecialchars(substr($r['descripcion'], 0, 50)) ?>...</td>
+                <td><span class="badge badge-pendiente"><?= $r['estado'] ?></span></td>
+                <td>
+                  <a href="ver_receta.php?id=<?= $r['receta_id'] ?>" class="btn btn-primary" style="padding: 5px 10px; font-size: 12px;">Ver</a>
+                </td>
+              </tr>
+              <?php endwhile; ?>
+            </tbody>
+          </table>
+          <?php else: ?>
+          <p style="text-align: center; color: #6c757d; padding: 40px;">No hay recetas registradas</p>
+          <?php endif; ?>
+        </div>
+
+        <!-- Tab Alertas -->
+        <div id="alertas" class="tab-content">
+          <?php if ($resAlertas->num_rows > 0): ?>
+          <table>
+            <thead>
+              <tr>
+                <th>Fecha</th>
+                <th>Tipo</th>
+                <th>Mensaje</th>
+                <th>Estado</th>
+              </tr>
+            </thead>
+            <tbody>
+              <?php while($a = $resAlertas->fetch_assoc()): ?>
+              <tr>
+                <td><?= date('d/m/Y H:i', strtotime($a['created_at'])) ?></td>
+                <td><?= $a['tipo'] ?></td>
+                <td><?= htmlspecialchars($a['mensaje']) ?></td>
+                <td><span class="badge badge-pendiente"><?= $a['estado'] ?></span></td>
+              </tr>
+              <?php endwhile; ?>
+            </tbody>
+          </table>
+          <?php else: ?>
+          <p style="text-align: center; color: #6c757d; padding: 40px;">No hay alertas registradas</p>
+          <?php endif; ?>
+        </div>
       </div>
     </div>
   </div>
 </div>
+
+<script>
+// Tabs
+function openTab(evt, tabName) {
+  var i, tabcontent, tabs;
+  tabcontent = document.getElementsByClassName("tab-content");
+  for (i = 0; i < tabcontent.length; i++) {
+    tabcontent[i].style.display = "none";
+    tabcontent[i].classList.remove("active");
+  }
+  tabs = document.getElementsByClassName("tab");
+  for (i = 0; i < tabs.length; i++) {
+    tabs[i].classList.remove("active");
+  }
+  document.getElementById(tabName).style.display = "block";
+  document.getElementById(tabName).classList.add("active");
+  evt.currentTarget.classList.add("active");
+}
+
+// Gráfica de Peso
+var ctxPeso = document.getElementById('chartPeso').getContext('2d');
+new Chart(ctxPeso, {
+  type: 'line',
+  data: {
+    labels: <?= json_encode($labels) ?>,
+    datasets: [{
+      label: 'Peso (kg)',
+      data: <?= json_encode($pesos) ?>,
+      borderColor: '#667eea',
+      backgroundColor: 'rgba(102, 126, 234, 0.1)',
+      tension: 0.4,
+      fill: true
+    }]
+  },
+  options: {
+    responsive: true,
+    maintainAspectRatio: false
+  }
+});
+
+// Gráfica de Saturación
+var ctxSat = document.getElementById('chartSaturacion').getContext('2d');
+new Chart(ctxSat, {
+  type: 'line',
+  data: {
+    labels: <?= json_encode($labels) ?>,
+    datasets: [{
+      label: 'Saturación (%)',
+      data: <?= json_encode($saturaciones) ?>,
+      borderColor: '#f5576c',
+      backgroundColor: 'rgba(245, 87, 108, 0.1)',
+      tension: 0.4,
+      fill: true
+    }]
+  },
+  options: {
+    responsive: true,
+    maintainAspectRatio: false,
+    scales: {
+      y: {
+        min: 80,
+        max: 100
+      }
+    }
+  }
+});
+</script>
 
 </body>
 </html>

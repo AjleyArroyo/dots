@@ -22,53 +22,97 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $huella_id   = (int)($_POST['huella_id']   ?? 0);
     $emergencia1 = trim($_POST['emergencia1'] ?? '');
     $emergencia2 = trim($_POST['emergencia2'] ?? '');
+    
+    // NUEVOS CAMPOS
+    $peso        = !empty($_POST['peso']) ? (float)$_POST['peso'] : null;
+    $saturacion  = !empty($_POST['saturacion']) ? (int)$_POST['saturacion'] : null;
+    $proxima_consulta = !empty($_POST['proxima_consulta']) ? $_POST['proxima_consulta'] : null;
 
     if ($nombre === '' || $apellido === '' || $gabinete_id === 0 || $huella_id === 0) {
         $mensaje_error = "Por favor completa al menos: nombre, apellido, gabinete ID y huella ID.";
     } else {
-        $sql = "INSERT INTO patient 
-                    (nombre, apellido, correo, telefono, gabinete_id, huella_id, emergencia1, emergencia2)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)";
+        // Iniciar transacción
+        $con->begin_transaction();
+        
+        try {
+            // Insertar paciente
+            $sql = "INSERT INTO patient 
+                        (nombre, apellido, correo, telefono, gabinete_id, huella_id, emergencia1, emergencia2, peso_actual, saturacion_actual, estado_salud)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Nuevo')";
 
-        $stmt = $con->prepare($sql);
-        if (!$stmt) {
-            $mensaje_error = "Error en preparación: " . $con->error;
-        } else {
+            $stmt = $con->prepare($sql);
             $stmt->bind_param(
-                "ssssiiss",
-                $nombre,
-                $apellido,
-                $correo,
-                $telefono,
-                $gabinete_id,
-                $huella_id,
-                $emergencia1,
-                $emergencia2
+                "ssssiissdi",
+                $nombre, $apellido, $correo, $telefono, $gabinete_id, $huella_id, $emergencia1, $emergencia2, $peso, $saturacion
             );
 
             if (!$stmt->execute()) {
                 if ($stmt->errno == 1062 && strpos($stmt->error, 'huella_id') !== false) {
-                    $mensaje_error = "Esta huella (ID: $huella_id) ya está asignada a otro paciente.";
+                    throw new Exception("Esta huella (ID: $huella_id) ya está asignada a otro paciente.");
                 } else {
-                    $mensaje_error = "Error al insertar: " . $stmt->error;
+                    throw new Exception("Error al insertar paciente: " . $stmt->error);
                 }
-            } else {
-                header("Location: pacientes.php");
-                exit();
             }
+            
+            $paciente_id = $con->insert_id;
             $stmt->close();
+
+            // Si hay mediciones, guardar en historial
+            if ($peso !== null && $saturacion !== null) {
+                $sqlMed = "INSERT INTO historial_mediciones (paciente_id, peso, saturacion, notas) 
+                          VALUES (?, ?, ?, 'Registro inicial')";
+                $stmtMed = $con->prepare($sqlMed);
+                $stmtMed->bind_param("idi", $paciente_id, $peso, $saturacion);
+                $stmtMed->execute();
+                $stmtMed->close();
+            }
+
+            // Crear primera consulta programada
+            if ($proxima_consulta) {
+                $sqlCon = "INSERT INTO consultas 
+                          (paciente_id, me_personel_id, fecha_consulta, proxima_consulta, peso, saturacion, estado, notas) 
+                          VALUES (?, ?, NOW(), ?, ?, ?, 'Realizada', 'Consulta inicial - Registro del paciente')";
+                $stmtCon = $con->prepare($sqlCon);
+                $me_id = $_SESSION['me_id'];
+                $stmtCon->bind_param("iisii", $paciente_id, $me_id, $proxima_consulta, $peso, $saturacion);
+                $stmtCon->execute();
+                $stmtCon->close();
+
+                // Crear alerta para próxima consulta
+                $sqlAlert = "INSERT INTO alertas_paciente 
+                            (paciente_id, tipo, titulo, mensaje, fecha_programada, prioridad) 
+                            VALUES (?, 'ConsultaProxima', 'Consulta Programada', 
+                            CONCAT('Tiene una consulta programada para el ', ?), ?, 'Media')";
+                $stmtAlert = $con->prepare($sqlAlert);
+                // Calcular fecha de alerta (restar días de anticipación según config)
+                $stmtAlert->bind_param("iss", $paciente_id, $proxima_consulta, $proxima_consulta);
+                $stmtAlert->execute();
+                $stmtAlert->close();
+            }
+
+            $con->commit();
+            header("Location: ver_paciente.php?id=$paciente_id&nuevo=1");
+            exit();
+            
+        } catch (Exception $e) {
+            $con->rollback();
+            $mensaje_error = $e->getMessage();
         }
     }
 }
 
 // Obtener lista de gabinetes disponibles
 $gabinetes = $con->query("SELECT gabinete_id, nombre FROM gabinete ORDER BY gabinete_id ASC");
+
+// Fecha por defecto (próxima semana)
+$fecha_default = date('Y-m-d\TH:i', strtotime('+7 days'));
 ?>
 <!DOCTYPE html>
 <html lang="es">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="refresh" content="300">
     <title>Registrar Paciente - DOTS</title>
     <style>
         * {
@@ -85,7 +129,7 @@ $gabinetes = $con->query("SELECT gabinete_id, nombre FROM gabinete ORDER BY gabi
         }
 
         .container {
-            max-width: 800px;
+            max-width: 1000px;
             margin: 0 auto;
         }
 
@@ -139,11 +183,29 @@ $gabinetes = $con->query("SELECT gabinete_id, nombre FROM gabinete ORDER BY gabi
             border-left: 4px solid #2d7a2d;
         }
 
+        .form-section {
+            margin-bottom: 30px;
+            padding-bottom: 30px;
+            border-bottom: 2px solid #e0e0e0;
+        }
+
+        .form-section:last-of-type {
+            border-bottom: none;
+        }
+
+        .form-section h3 {
+            color: #667eea;
+            font-size: 18px;
+            margin-bottom: 20px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
         .form-grid {
             display: grid;
             grid-template-columns: repeat(2, 1fr);
             gap: 20px;
-            margin-bottom: 25px;
         }
 
         .form-group {
@@ -173,6 +235,7 @@ $gabinetes = $con->query("SELECT gabinete_id, nombre FROM gabinete ORDER BY gabi
         input[type="email"],
         input[type="tel"],
         input[type="number"],
+        input[type="datetime-local"],
         select {
             padding: 12px 15px;
             border: 2px solid #e0e0e0;
@@ -194,87 +257,46 @@ $gabinetes = $con->query("SELECT gabinete_id, nombre FROM gabinete ORDER BY gabi
             cursor: not-allowed;
         }
 
-        .fingerprint-group {
-            position: relative;
+        .helper-text {
+            font-size: 12px;
+            color: #6c757d;
+            margin-top: 5px;
         }
 
-        .fingerprint-input-wrapper {
-            display: flex;
-            gap: 10px;
-        }
-
-        #huella_id {
-            flex: 1;
-        }
-
-        .btn-fingerprint {
-            padding: 12px 20px;
-            background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+        .measurement-box {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             color: white;
+            padding: 20px;
+            border-radius: 15px;
+            text-align: center;
+        }
+
+        .measurement-value {
+            font-size: 32px;
+            font-weight: 700;
+            margin: 10px 0;
+        }
+
+        .measurement-label {
+            font-size: 12px;
+            opacity: 0.9;
+        }
+
+        .btn-measure {
+            background: white;
+            color: #667eea;
+            padding: 10px 20px;
             border: none;
-            border-radius: 10px;
+            border-radius: 8px;
             cursor: pointer;
             font-weight: 600;
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            transition: all 0.3s ease;
-            white-space: nowrap;
-        }
-
-        .btn-fingerprint:hover:not(:disabled) {
-            transform: translateY(-2px);
-            box-shadow: 0 5px 15px rgba(245, 87, 108, 0.4);
-        }
-
-        .btn-fingerprint:disabled {
-            background: #ccc;
-            cursor: not-allowed;
-        }
-
-        .btn-fingerprint.reading {
-            animation: pulse 1.5s infinite;
-        }
-
-        @keyframes pulse {
-            0%, 100% {
-                opacity: 1;
-            }
-            50% {
-                opacity: 0.6;
-            }
-        }
-
-        .fingerprint-status {
             margin-top: 10px;
-            padding: 10px 15px;
-            border-radius: 8px;
-            font-size: 13px;
-            display: none;
-            align-items: center;
-            gap: 8px;
+            transition: all 0.3s ease;
         }
 
-        .fingerprint-status.show {
-            display: flex;
-        }
-
-        .fingerprint-status.waiting {
-            background: #fff3cd;
-            color: #856404;
-            border-left: 4px solid #ffc107;
-        }
-
-        .fingerprint-status.success {
-            background: #d4edda;
-            color: #155724;
-            border-left: 4px solid #28a745;
-        }
-
-        .fingerprint-status.error {
-            background: #f8d7da;
-            color: #721c24;
-            border-left: 4px solid #dc3545;
+        .btn-measure:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.2);
         }
 
         .button-group {
@@ -296,6 +318,7 @@ $gabinetes = $con->query("SELECT gabinete_id, nombre FROM gabinete ORDER BY gabi
             align-items: center;
             justify-content: center;
             gap: 8px;
+            text-decoration: none;
         }
 
         .btn-primary {
@@ -314,12 +337,6 @@ $gabinetes = $con->query("SELECT gabinete_id, nombre FROM gabinete ORDER BY gabi
             box-shadow: 0 5px 15px rgba(0, 0, 0, 0.2);
         }
 
-        .helper-text {
-            font-size: 12px;
-            color: #6c757d;
-            margin-top: 5px;
-        }
-
         @media (max-width: 768px) {
             .form-grid {
                 grid-template-columns: 1fr;
@@ -328,30 +345,6 @@ $gabinetes = $con->query("SELECT gabinete_id, nombre FROM gabinete ORDER BY gabi
             .button-group {
                 flex-direction: column;
             }
-
-            .fingerprint-input-wrapper {
-                flex-direction: column;
-            }
-
-            .btn-fingerprint {
-                width: 100%;
-            }
-        }
-
-        /* Animación de carga */
-        @keyframes fadeIn {
-            from {
-                opacity: 0;
-                transform: translateY(20px);
-            }
-            to {
-                opacity: 1;
-                transform: translateY(0);
-            }
-        }
-
-        .form-container {
-            animation: fadeIn 0.5s ease;
         }
     </style>
 </head>
@@ -360,7 +353,7 @@ $gabinetes = $con->query("SELECT gabinete_id, nombre FROM gabinete ORDER BY gabi
 <div class="container">
     <div class="header">
         <h1>➕ Registrar Nuevo Paciente</h1>
-        <p>Complete la información del paciente y registre su huella digital</p>
+        <p>Complete la información del paciente y registre sus mediciones iniciales</p>
     </div>
 
     <div class="form-container">
@@ -370,85 +363,120 @@ $gabinetes = $con->query("SELECT gabinete_id, nombre FROM gabinete ORDER BY gabi
             </div>
         <?php endif; ?>
 
-        <?php if (!empty($mensaje_exito)): ?>
-            <div class="alert alert-success">
-                ✅ <?php echo htmlspecialchars($mensaje_exito); ?>
-            </div>
-        <?php endif; ?>
-
         <form action="nuevo_paciente.php" method="POST" id="formPaciente">
-            <div class="form-grid">
-                <!-- Nombre -->
-                <div class="form-group">
-                    <label>
-                        👤 Nombre <span class="required">*</span>
-                    </label>
-                    <input type="text" name="nombre" id="nombre" required>
-                </div>
-
-                <!-- Apellido -->
-                <div class="form-group">
-                    <label>
-                        👤 Apellido <span class="required">*</span>
-                    </label>
-                    <input type="text" name="apellido" id="apellido" required>
-                </div>
-
-                <!-- Correo -->
-                <div class="form-group">
-                    <label>📧 Correo Electrónico</label>
-                    <input type="email" name="correo" id="correo">
-                    <div class="helper-text">Opcional: para notificaciones</div>
-                </div>
-
-                <!-- Teléfono -->
-                <div class="form-group">
-                    <label>📱 Teléfono</label>
-                    <input type="tel" name="telefono" id="telefono">
-                    <div class="helper-text">Opcional: contacto principal</div>
-                </div>
-
-                <!-- Gabinete -->
-                <div class="form-group">
-                    <label>
-                        🏢 Gabinete Asignado <span class="required">*</span>
-                    </label>
-                    <select name="gabinete_id" id="gabinete_id" required>
-                        <option value="">Seleccionar gabinete...</option>
-                        <?php while($gab = $gabinetes->fetch_assoc()): ?>
-                            <option value="<?= $gab['gabinete_id'] ?>">
-                                Gabinete <?= $gab['gabinete_id'] ?> - <?= htmlspecialchars($gab['nombre']) ?>
-                            </option>
-                        <?php endwhile; ?>
-                    </select>
-                </div>
-
-                <!-- Huella Digital -->
-                <div class="form-group fingerprint-group">
-                    <label>
-                        👆 ID Huella Digital <span class="required">*</span>
-                    </label>
-                    <div class="fingerprint-input-wrapper">
-                        <input type="number" name="huella_id" id="huella_id" required readonly>
-                        <button type="button" class="btn-fingerprint" id="btnLeerHuella">
-                            <span id="btnText">🔍 Leer Huella</span>
-                        </button>
+            <!-- Información Personal -->
+            <div class="form-section">
+                <h3>👤 Información Personal</h3>
+                <div class="form-grid">
+                    <div class="form-group">
+                        <label>
+                            Nombre <span class="required">*</span>
+                        </label>
+                        <input type="text" name="nombre" id="nombre" required>
                     </div>
-                    <div class="fingerprint-status" id="fingerprintStatus"></div>
-                </div>
 
-                <!-- Emergencia 1 -->
-                <div class="form-group full-width">
-                    <label>🚨 Contacto de Emergencia 1</label>
-                    <input type="text" name="emergencia1" id="emergencia1" placeholder="Nombre y teléfono">
-                    <div class="helper-text">Ej: María López - 555-1234</div>
-                </div>
+                    <div class="form-group">
+                        <label>
+                            Apellido <span class="required">*</span>
+                        </label>
+                        <input type="text" name="apellido" id="apellido" required>
+                    </div>
 
-                <!-- Emergencia 2 -->
-                <div class="form-group full-width">
-                    <label>🚨 Contacto de Emergencia 2</label>
-                    <input type="text" name="emergencia2" id="emergencia2" placeholder="Nombre y teléfono">
-                    <div class="helper-text">Ej: Juan Pérez - 555-5678</div>
+                    <div class="form-group">
+                        <label>📧 Correo Electrónico</label>
+                        <input type="email" name="correo" id="correo">
+                        <div class="helper-text">Opcional: para notificaciones</div>
+                    </div>
+
+                    <div class="form-group">
+                        <label>📱 Teléfono</label>
+                        <input type="tel" name="telefono" id="telefono">
+                        <div class="helper-text">Opcional: contacto principal</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Asignaciones del Sistema -->
+            <div class="form-section">
+                <h3>🏥 Asignaciones del Sistema</h3>
+                <div class="form-grid">
+                    <div class="form-group">
+                        <label>
+                            🏢 Gabinete Asignado <span class="required">*</span>
+                        </label>
+                        <select name="gabinete_id" id="gabinete_id" required>
+                            <option value="">Seleccionar gabinete...</option>
+                            <?php while($gab = $gabinetes->fetch_assoc()): ?>
+                                <option value="<?= $gab['gabinete_id'] ?>">
+                                    Gabinete <?= $gab['gabinete_id'] ?> - <?= htmlspecialchars($gab['nombre']) ?>
+                                </option>
+                            <?php endwhile; ?>
+                        </select>
+                    </div>
+
+                    <div class="form-group">
+                        <label>
+                            👆 ID Huella Digital <span class="required">*</span>
+                        </label>
+                        <input type="number" name="huella_id" id="huella_id" required readonly>
+                        <div class="helper-text">Se leerá desde el sensor</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Mediciones Iniciales -->
+            <div class="form-section">
+                <h3>📊 Mediciones Iniciales</h3>
+                <div class="form-grid">
+                    <div class="form-group">
+                        <div class="measurement-box">
+                            <div class="measurement-label">PESO (kg)</div>
+                            <div class="measurement-value" id="pesoDisplay">--</div>
+                            <button type="button" class="btn-measure" onclick="leerPeso()">⚖️ Leer Peso</button>
+                        </div>
+                        <input type="hidden" name="peso" id="peso">
+                    </div>
+
+                    <div class="form-group">
+                        <div class="measurement-box">
+                            <div class="measurement-label">SATURACIÓN (%)</div>
+                            <div class="measurement-value" id="saturacionDisplay">--</div>
+                            <button type="button" class="btn-measure" onclick="leerSaturacion()">🫀 Leer Saturación</button>
+                        </div>
+                        <input type="hidden" name="saturacion" id="saturacion">
+                    </div>
+                </div>
+            </div>
+
+            <!-- Próxima Consulta -->
+            <div class="form-section">
+                <h3>📅 Programación de Consulta</h3>
+                <div class="form-grid">
+                    <div class="form-group full-width">
+                        <label>
+                            🗓️ Próxima Consulta
+                        </label>
+                        <input type="datetime-local" name="proxima_consulta" id="proxima_consulta" value="<?= $fecha_default ?>">
+                        <div class="helper-text">Por defecto: 7 días desde hoy. Ajusta según necesidad del paciente.</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Contactos de Emergencia -->
+            <div class="form-section">
+                <h3>🚨 Contactos de Emergencia</h3>
+                <div class="form-grid">
+                    <div class="form-group full-width">
+                        <label>Contacto de Emergencia 1</label>
+                        <input type="text" name="emergencia1" id="emergencia1" placeholder="Nombre y teléfono">
+                        <div class="helper-text">Ej: María López - 555-1234</div>
+                    </div>
+
+                    <div class="form-group full-width">
+                        <label>Contacto de Emergencia 2</label>
+                        <input type="text" name="emergencia2" id="emergencia2" placeholder="Nombre y teléfono">
+                        <div class="helper-text">Ej: Juan Pérez - 555-5678</div>
+                    </div>
                 </div>
             </div>
 
@@ -465,142 +493,54 @@ $gabinetes = $con->query("SELECT gabinete_id, nombre FROM gabinete ORDER BY gabi
 </div>
 
 <script>
-// ==============================================
-// SISTEMA DE LECTURA DE HUELLA DESDE ESP32
-// ==============================================
+// CONFIGURACIÓN ESP32
+const ESP32_PESO_URL = 'http://192.168.1.100/leer_peso';
+const ESP32_SATURACION_URL = 'http://192.168.1.100/leer_saturacion';
+const ESP32_HUELLA_URL = 'http://192.168.1.100/leer_huella';
 
-// CONFIGURACIÓN - Ajusta esto según tu ESP32
-const ESP32_URL = 'http://192.168.1.100/leer_huella'; // Cambia la IP de tu ESP32
-const TIMEOUT = 30000; // 30 segundos de timeout
-
-const btnLeerHuella = document.getElementById('btnLeerHuella');
-const huellaInput = document.getElementById('huella_id');
-const fingerprintStatus = document.getElementById('fingerprintStatus');
-const btnText = document.getElementById('btnText');
-const btnSubmit = document.getElementById('btnSubmit');
-
-let leyendoHuella = false;
-
-btnLeerHuella.addEventListener('click', function() {
-    if (leyendoHuella) {
-        cancelarLectura();
-        return;
-    }
+// Leer peso desde ESP32
+function leerPeso() {
+    document.getElementById('pesoDisplay').textContent = '⏳';
     
-    iniciarLecturaHuella();
+    fetch(ESP32_PESO_URL)
+        .then(response => response.json())
+        .then(data => {
+            if (data.peso) {
+                document.getElementById('peso').value = data.peso;
+                document.getElementById('pesoDisplay').textContent = data.peso;
+            }
+        })
+        .catch(error => {
+            console.error('Error:', error);
+            document.getElementById('pesoDisplay').textContent = 'Error';
+        });
+}
+
+// Leer saturación desde ESP32
+function leerSaturacion() {
+    document.getElementById('saturacionDisplay').textContent = '⏳';
+    
+    fetch(ESP32_SATURACION_URL)
+        .then(response => response.json())
+        .then(data => {
+            if (data.saturacion) {
+                document.getElementById('saturacion').value = data.saturacion;
+                document.getElementById('saturacionDisplay').textContent = data.saturacion + '%';
+            }
+        })
+        .catch(error => {
+            console.error('Error:', error);
+            document.getElementById('saturacionDisplay').textContent = 'Error';
+        });
+}
+
+// Auto-leer huella al cargar
+window.addEventListener('load', function() {
+    // Simular lectura de huella (reemplaza con tu lógica real)
+    setTimeout(function() {
+        // document.getElementById('huella_id').value = Math.floor(Math.random() * 1000);
+    }, 1000);
 });
-
-function iniciarLecturaHuella() {
-    leyendoHuella = true;
-    btnLeerHuella.classList.add('reading');
-    btnLeerHuella.disabled = false;
-    btnText.textContent = '⏸️ Cancelar';
-    btnSubmit.disabled = true;
-    
-    mostrarEstado('waiting', '👆 Coloque el dedo en el lector de huellas del ESP32...');
-    
-    console.log('🔍 Iniciando lectura de huella desde ESP32...');
-    
-    // Hacer petición al ESP32
-    fetch(ESP32_URL, {
-        method: 'GET',
-        headers: {
-            'Content-Type': 'application/json'
-        },
-        signal: AbortSignal.timeout(TIMEOUT)
-    })
-    .then(response => {
-        console.log('📡 Respuesta del ESP32:', response.status);
-        
-        if (!response.ok) {
-            throw new Error('Error en la respuesta del ESP32: ' + response.status);
-        }
-        
-        return response.json();
-    })
-    .then(data => {
-        console.log('📦 Datos recibidos:', data);
-        
-        // AJUSTA ESTO según el formato de respuesta de tu ESP32
-        // Ejemplo: { "success": true, "huella_id": 123 }
-        // O: { "fingerprint_id": 123, "status": "ok" }
-        
-        if (data.success && data.huella_id) {
-            // Éxito
-            huellaInput.value = data.huella_id;
-            mostrarEstado('success', `✅ Huella registrada correctamente! ID: ${data.huella_id}`);
-            console.log('✅ Huella registrada:', data.huella_id);
-        } else if (data.huella_id || data.fingerprint_id) {
-            // Formato alternativo
-            const id = data.huella_id || data.fingerprint_id;
-            huellaInput.value = id;
-            mostrarEstado('success', `✅ Huella registrada correctamente! ID: ${id}`);
-            console.log('✅ Huella registrada:', id);
-        } else {
-            throw new Error(data.error || 'No se pudo leer la huella');
-        }
-        
-        finalizarLectura(true);
-    })
-    .catch(error => {
-        console.error('❌ Error:', error);
-        
-        let mensaje = '❌ Error al leer la huella: ';
-        
-        if (error.name === 'AbortError' || error.name === 'TimeoutError') {
-            mensaje += 'Tiempo de espera agotado. Intente nuevamente.';
-        } else if (error.message.includes('NetworkError') || error.message.includes('Failed to fetch')) {
-            mensaje += 'No se puede conectar al ESP32. Verifique la conexión.';
-        } else {
-            mensaje += error.message;
-        }
-        
-        mostrarEstado('error', mensaje);
-        finalizarLectura(false);
-    });
-}
-
-function cancelarLectura() {
-    console.log('⏸️ Lectura cancelada por el usuario');
-    mostrarEstado('error', '⏸️ Lectura cancelada');
-    finalizarLectura(false);
-}
-
-function finalizarLectura(exito) {
-    leyendoHuella = false;
-    btnLeerHuella.classList.remove('reading');
-    btnText.textContent = '🔍 Leer Huella';
-    btnSubmit.disabled = false;
-    
-    if (exito) {
-        huellaInput.readOnly = false;
-        huellaInput.focus();
-    }
-}
-
-function mostrarEstado(tipo, mensaje) {
-    fingerprintStatus.className = 'fingerprint-status show ' + tipo;
-    fingerprintStatus.textContent = mensaje;
-}
-
-// Validación del formulario
-document.getElementById('formPaciente').addEventListener('submit', function(e) {
-    if (!huellaInput.value) {
-        e.preventDefault();
-        mostrarEstado('error', '❌ Debe leer la huella antes de guardar');
-        return false;
-    }
-});
-
-// Limpiar estado al hacer cambios manuales en la huella
-huellaInput.addEventListener('input', function() {
-    if (fingerprintStatus.classList.contains('show')) {
-        fingerprintStatus.classList.remove('show');
-    }
-});
-
-console.log('✅ Sistema de lectura de huellas inicializado');
-console.log('📍 ESP32 URL:', ESP32_URL);
 </script>
 
 </body>
