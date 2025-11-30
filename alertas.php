@@ -28,6 +28,17 @@ $stats = $resStats->fetch_assoc();
 // Filtros
 $filtro_tipo = isset($_GET['tipo']) ? $_GET['tipo'] : 'todos';
 $filtro_estado = isset($_GET['estado']) ? $_GET['estado'] : 'todos';
+$filtro_paciente = isset($_GET['paciente_id']) ? intval($_GET['paciente_id']) : 0;
+
+// Obtener info del paciente si hay filtro
+$paciente_filtrado = null;
+if ($filtro_paciente > 0) {
+    $sqlPac = "SELECT nombre, apellido FROM patient WHERE paciente_id = $filtro_paciente";
+    $resPac = $con->query($sqlPac);
+    if ($resPac && $resPac->num_rows > 0) {
+        $paciente_filtrado = $resPac->fetch_assoc();
+    }
+}
 
 // Query principal
 $where = ["1=1"];
@@ -36,6 +47,9 @@ if ($filtro_tipo !== 'todos') {
 }
 if ($filtro_estado !== 'todos') {
     $where[] = "a.estado = '" . $con->real_escape_string($filtro_estado) . "'";
+}
+if ($filtro_paciente > 0) {
+    $where[] = "a.paciente_id = $filtro_paciente";
 }
 
 $sqlAlertas = "SELECT a.*, p.nombre, p.apellido 
@@ -215,7 +229,14 @@ $resAlertas = $con->query($sqlAlertas);
   <div class="header">
     <div>
       <h1>🔔 Centro de Alertas</h1>
-      <p style="color: #6c757d; font-size: 14px;">Gestión de notificaciones y seguimiento de pacientes</p>
+      <?php if ($paciente_filtrado): ?>
+        <p style="color: #6c757d; font-size: 14px;">
+          Mostrando alertas de: <strong style="color: #667eea;"><?= htmlspecialchars($paciente_filtrado['nombre'] . ' ' . $paciente_filtrado['apellido']) ?></strong>
+          <a href="alertas.php" style="color: #667eea; text-decoration: none; margin-left: 10px;">(Ver todas)</a>
+        </p>
+      <?php else: ?>
+        <p style="color: #6c757d; font-size: 14px;">Gestión de notificaciones y seguimiento de pacientes</p>
+      <?php endif; ?>
     </div>
     <a href="dashboard.php" class="btn btn-secondary">⬅️ Volver al Dashboard</a>
   </div>
@@ -242,6 +263,10 @@ $resAlertas = $con->query($sqlAlertas);
 
   <!-- Filtros -->
   <form method="GET" class="filters">
+    <?php if ($filtro_paciente > 0): ?>
+      <input type="hidden" name="paciente_id" value="<?= $filtro_paciente ?>">
+    <?php endif; ?>
+    
     <div class="filter-group">
       <label>Tipo de Alerta</label>
       <select name="tipo" onchange="this.form.submit()">
@@ -261,7 +286,7 @@ $resAlertas = $con->query($sqlAlertas);
         <option value="Leida" <?= $filtro_estado === 'Leida' ? 'selected' : '' ?>>Leída</option>
       </select>
     </div>
-    <?php if ($filtro_tipo !== 'todos' || $filtro_estado !== 'todos'): ?>
+    <?php if ($filtro_tipo !== 'todos' || $filtro_estado !== 'todos' || $filtro_paciente > 0): ?>
       <div class="filter-group">
         <label>&nbsp;</label>
         <a href="alertas.php" class="btn btn-secondary">🔄 Limpiar Filtros</a>

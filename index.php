@@ -28,6 +28,19 @@ if (isset($_POST['login'])) {
 <html lang="es">
 <head>
   <meta charset="UTF-8">
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  
+  <!-- PWA Meta Tags -->
+  <meta name="theme-color" content="#667eea">
+  <meta name="description" content="Sistema DOTS de gestión hospitalaria">
+  <link rel="manifest" href="manifest.json">
+  
+  <!-- iOS Meta Tags -->
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="DOTS">
+  <link rel="apple-touch-icon" href="icon-192.png">
   <title>Login DOTS</title>
   <style>
     body {
@@ -88,6 +101,18 @@ if (isset($_POST['login'])) {
     <input type="submit" name="login" value="Iniciar Sesión">
   </form>
 </div>
-
+<script>
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', function() {
+    navigator.serviceWorker.register('service-worker.js')
+      .then(function(registration) {
+        console.log('✅ Service Worker registrado:', registration);
+      })
+      .catch(function(error) {
+        console.log('❌ Error al registrar Service Worker:', error);
+      });
+  });
+}
+</script>
 </body>
 </html>

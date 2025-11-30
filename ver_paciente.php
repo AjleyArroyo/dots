@@ -308,6 +308,18 @@ foreach($mediciones as $med) {
     </div>
     <div class="header-actions">
       <a href="pacientes.php" class="btn btn-secondary">⬅️ Volver</a>
+      <a href="alertas.php?paciente_id=<?= $paciente_id ?>" class="btn btn-primary" style="background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);">
+        🔔 Ver Alertas
+        <?php
+        // Contar alertas pendientes del paciente
+        $sqlCountAlertas = "SELECT COUNT(*) as total FROM alertas_paciente WHERE paciente_id = $paciente_id AND estado = 'Pendiente'";
+        $resCountAlertas = $con->query($sqlCountAlertas);
+        $countAlertas = $resCountAlertas->fetch_assoc()['total'];
+        if ($countAlertas > 0) {
+            echo '<span style="background: white; color: #f5576c; padding: 2px 8px; border-radius: 10px; font-size: 12px; margin-left: 5px;">' . $countAlertas . '</span>';
+        }
+        ?>
+      </a>
       <a href="editar_paciente.php?id=<?= $paciente_id ?>" class="btn btn-primary">✏️ Editar</a>
       <a href="nueva_consulta.php?paciente_id=<?= $paciente_id ?>" class="btn btn-success">➕ Nueva Consulta</a>
     </div>
