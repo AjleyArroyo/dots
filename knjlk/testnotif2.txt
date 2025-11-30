@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Firebase Push Notifications</title>
+  <!-- Firebase SDK -->
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/11.9.1/firebase-app.js";
+    import { getMessaging, getToken, onMessage } from "https://www.gstatic.com/firebasejs/11.9.1/firebase-messaging.js";
+
+    // Firebase configuration
+    const firebaseConfig = {
+      apiKey: "AIzaSyB_EKVCPO1lCx4hPuyVjVf3xACL48MI26w",
+      authDomain: "gabineteinteligente-71609.firebaseapp.com",
+      projectId: "gabineteinteligente-71609",
+      storageBucket: "gabineteinteligente-71609.firebasestorage.app",
+      messagingSenderId: "404798049461",
+      appId: "1:404798049461:web:d86122551ff84bdd42c2fc",
+      measurementId: "G-ZXWQTWHL6C"
+    };
+
+    // Initialize Firebase
+    const app = initializeApp(firebaseConfig);
+    const messaging = getMessaging(app);
+
+    // Requesting permission for push notifications
+    async function requestPermission() {
+      try {
+        await Notification.requestPermission();
+        console.log("Notification permission granted.");
+
+        // Get Firebase Cloud Messaging token
+        const token = await getToken(messaging, { vapidKey: "BErfw-EqM-Ut72kl18Lb-pYCn_jiVCJhuvLonB3COvjblo2c5laFCDvZ-9_lb94FSWoshlHzgiFADIjnnLmnXAY" });
+        console.log("FCM Token:", token);
+        if (token) {
+          // Send this token to the server for later use (you can use PHP to store it in a database)
+          sendTokenToServer(token);
+        } else {
+          console.log("No registration token available.");
+        }
+      } catch (err) {
+        console.error("Permission denied or error:", err);
+      }
+    }
+
+    // Handling foreground notifications
+    onMessage(messaging, (payload) => {
+      console.log("Message received: ", payload);
+      alert(payload.notification.title + ": " + payload.notification.body);
+    });
+
+    // Send FCM token to server
+    function sendTokenToServer(token) {
+      fetch("index.php", {
+        method: 'POST',
+        body: JSON.stringify({ token: token }),
+        headers: { "Content-Type": "application/json" }
+      })
+      .then(response => response.text())
+      .then(data => {
+        console.log("Token sent to server:", data);
+      })
+      .catch(error => console.error("Error:", error));
+    }
+
+    // Requesting permission when page loads
+    requestPermission();
+  </script>
+</head>
+<body>
+  <h1>Welcome to Firebase Push Notification Demo</h1>
+  <p>Click the button below to request notification permission and receive push notifications.</p>
+  <button onclick="requestPermission()">Enable Notifications</button>
+  <p id="status"></p>
+</body>
+</html>
