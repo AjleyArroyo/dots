@@ -1,0 +1,3 @@
+[2025-12-02 05:34:37] Método: GET
+[2025-12-02 05:34:37] Datos procesados: []
+[2025-12-02 05:34:37] ERROR: No se recibieron datos

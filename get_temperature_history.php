@@ -64,14 +64,14 @@ while ($row = $result->fetch_assoc()) {
 }
 
 // Si no hay datos, generar datos de ejemplo (para testing)
-if (empty($labels)) {
-    for ($i = 0; $i < $config['points']; $i++) {
-        $time = date('H:i', strtotime("-" . ($config['points'] - $i) * $bucketMinutes . " minutes"));
-        $labels[] = $time;
-        $temperatures[] = round(20 + (rand(0, 50) / 10), 1);
-        $humidities[] = round(50 + (rand(0, 200) / 10), 1);
-    }
-}
+// if (empty($labels)) {
+//     for ($i = 0; $i < $config['points']; $i++) {
+//         $time = date('H:i', strtotime("-" . ($config['points'] - $i) * $bucketMinutes . " minutes"));
+//         $labels[] = $time;
+//         $temperatures[] = round(20 + (rand(0, 50) / 10), 1);
+//         $humidities[] = round(50 + (rand(0, 200) / 10), 1);
+//     }
+// }
 
 echo json_encode([
     'success' => true,
