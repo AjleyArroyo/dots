@@ -2,11 +2,12 @@
   "name": "DOTS Sistema Hospitalario",
   "short_name": "DOTS",
   "description": "Sistema de gestión de pacientes con tuberculosis",
-  "start_url": "./index.php",
+  "start_url": "/dots_proy/index.php",
   "display": "standalone",
   "background_color": "#667eea",
   "theme_color": "#667eea",
   "orientation": "portrait-primary",
+  "scope": "/dots_proy/",
   "icons": [
     {
       "src": "icon-192.png",

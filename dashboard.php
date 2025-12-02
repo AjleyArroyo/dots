@@ -1,7 +1,7 @@
 <?php
 session_start();
 if (!isset($_SESSION['me_id'])) {
-    header("Location: login.php");
+    header("Location: index.php");
     exit();
 }
 include("dbconnection.php");
@@ -37,7 +37,8 @@ if (empty($gabinetes)) {
   <!-- PWA Meta Tags -->
   <meta name="theme-color" content="#667eea">
   <meta name="description" content="Sistema DOTS de gestión hospitalaria">
-  <link rel="manifest" href="manifest.json">
+  <link rel="manifest" href="./manifest.json">
+
   
   <!-- iOS Meta Tags -->
   <meta name="apple-mobile-web-app-capable" content="yes">

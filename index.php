@@ -40,7 +40,8 @@ if (isset($_POST['login'])) {
   <!-- PWA Meta Tags -->
   <meta name="theme-color" content="#667eea">
   <meta name="description" content="Sistema DOTS de gestión hospitalaria">
-  <link rel="manifest" href="manifest.json">
+  <link rel="manifest" href="./manifest.json">
+
   
   <!-- iOS Meta Tags -->
   <meta name="apple-mobile-web-app-capable" content="yes">
@@ -225,13 +226,15 @@ if (isset($_POST['login'])) {
       transform: translateY(-2px);
     }
     
-    .footer {
-    display: "inline";
-      text-align: center;
-      color: rgba(255, 255, 255, 0.9);
-      margin-top: 30px;
-      font-size: 13px;
-    }
+  .footer {
+    position: fixed;
+    bottom: 10px;
+    left: 0;
+    width: 100%;
+    text-align: center;
+    color: rgba(255, 255, 255, 0.9);
+    font-size: 13px;
+  }
     
     @media (max-width: 480px) {
       .login-container {
@@ -285,7 +288,7 @@ if (isset($_POST['login'])) {
 </div>
 
 <div class="footer">
-  © 2024 Sistema DOTS - Todos los derechos reservados
+  © 2025 Sistema DOTS - Alvaro - Todos los derechos reservados
 </div>
 
 <script>
@@ -296,13 +299,10 @@ function fillCredentials(user, pass) {
 
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', function() {
-    navigator.serviceWorker.register('service-worker.js')
-      .then(function(registration) {
-        console.log('✅ Service Worker registrado:', registration);
-      })
-      .catch(function(error) {
-        console.log('❌ Error al registrar Service Worker:', error);
-      });
+    navigator.serviceWorker
+      .register('./service-worker.js')   // ← ESTA ES LA RUTA CORRECTA
+      .then(reg => console.log('SW registrado', reg))
+      .catch(err => console.log('Error SW', err));
   });
 }
 </script>

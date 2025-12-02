@@ -1,11 +1,10 @@
 const CACHE_NAME = 'dots-v1.0.0';
 const urlsToCache = [
-  '/index.php',
-  '/dashboard.php',
-  '/pacientes.php',
-  '/calendario.php',
-  '/alertas.php',
-  'https://cdn.jsdelivr.net/npm/chart.js'
+  "/dots_proy/",
+  "/dots_proy/index.php",
+  '/dots_proy/pacientes.php',
+  '/dots_proy/alertas.php',
+
 ];
 
 // Instalación
