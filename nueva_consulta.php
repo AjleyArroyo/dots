@@ -14,7 +14,6 @@ if ($paciente_id == 0) {
     exit();
 }
 
-// Obtener información del paciente
 $sqlPac = "SELECT * FROM patient WHERE paciente_id = $paciente_id";
 $resPac = $con->query($sqlPac);
 if ($resPac->num_rows == 0) {
@@ -34,9 +33,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $proxima_consulta = !empty($_POST['proxima_consulta']) ? $_POST['proxima_consulta'] : null;
     $tratamiento_finalizado = isset($_POST['tratamiento_finalizado']) ? 1 : 0;
     
-    // CONFIGURACIÓN: Minutos para próximas consultas por defecto
-    // EDITA AQUÍ para cambiar el intervalo de consultas en pruebas
-    $minutos_default = 10080; // 7 días = 10080 minutos. Para pruebas usa 1 minuto
+    $minutos_default = 10080;
     
     if (!$proxima_consulta && !$tratamiento_finalizado) {
         $proxima_consulta = date('Y-m-d H:i:s', strtotime("+$minutos_default minutes"));
@@ -45,7 +42,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $con->begin_transaction();
     
     try {
-        // 1. Registrar consulta
         $sqlCon = "INSERT INTO consultas 
                    (paciente_id, me_personel_id, fecha_consulta, proxima_consulta, peso, saturacion, notas, diagnostico, estado, tratamiento_finalizado) 
                    VALUES (?, ?, NOW(), ?, ?, ?, ?, ?, 'Realizada', ?)";
@@ -56,7 +52,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $consulta_id = $con->insert_id;
         $stmtCon->close();
 
-        // 2. Guardar medición en historial
         if ($peso !== null && $saturacion !== null) {
             $sqlMed = "INSERT INTO historial_mediciones (paciente_id, consulta_id, peso, saturacion) 
                       VALUES (?, ?, ?, ?)";
@@ -65,14 +60,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $stmtMed->execute();
             $stmtMed->close();
 
-            // 3. Actualizar peso y saturación actuales del paciente
             $sqlUpd = "UPDATE patient SET peso_actual = ?, saturacion_actual = ? WHERE paciente_id = ?";
             $stmtUpd = $con->prepare($sqlUpd);
             $stmtUpd->bind_param("dii", $peso, $saturacion, $paciente_id);
             $stmtUpd->execute();
             $stmtUpd->close();
 
-            // 4. Calcular estado de salud (comparar con medición anterior)
             $sqlPrev = "SELECT peso, saturacion FROM historial_mediciones 
                        WHERE paciente_id = ? AND medicion_id < ? 
                        ORDER BY fecha_medicion DESC LIMIT 1";
@@ -87,8 +80,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $peso_anterior = $prev['peso'];
                 $sat_anterior = $prev['saturacion'];
                 
-                // Lógica simple: si peso aumenta Y saturación mejora = Mejorando
-                // Si ambos empeoran = Empeorando, sino = Estable
                 $nuevo_estado = 'Estable';
                 
                 if ($peso > $peso_anterior && $saturacion >= $sat_anterior) {
@@ -106,13 +97,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $stmtPrev->close();
         }
 
-        // 5. Crear alerta para próxima consulta si no finalizó tratamiento
         if ($proxima_consulta && !$tratamiento_finalizado) {
-            // CONFIGURACIÓN: Obtener anticipación de alertas desde config_alertas
-            // EDITA en la tabla config_alertas el valor 'anticipacion_consulta' para cambiar cuándo notificar
             $sqlConfig = "SELECT valor FROM config_alertas WHERE nombre = 'anticipacion_consulta' AND activo = 1";
             $resConfig = $con->query($sqlConfig);
-            $minutos_anticipacion = 10080; // Default 7 días
+            $minutos_anticipacion = 10080;
             if ($resConfig && $resConfig->num_rows > 0) {
                 $configRow = $resConfig->fetch_assoc();
                 $minutos_anticipacion = $configRow['valor'];
@@ -130,7 +118,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $stmtAlert->close();
         }
 
-        // 6. Procesar recetas si las hay
         if (!empty($_POST['recetas'])) {
             foreach ($_POST['recetas'] as $receta) {
                 if (empty($receta['descripcion'])) continue;
@@ -159,7 +146,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 }
 
-// Fecha por defecto (próxima semana)
 $fecha_default = date('Y-m-d\TH:i', strtotime('+7 days'));
 ?>
 <!DOCTYPE html>
@@ -179,6 +165,7 @@ $fecha_default = date('Y-m-d\TH:i', strtotime('+7 days'));
         .container { max-width: 1200px; margin: 0 auto; }
         .header {
             background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
             padding: 25px 30px;
             border-radius: 20px;
             margin-bottom: 30px;
@@ -244,8 +231,9 @@ $fecha_default = date('Y-m-d\TH:i', strtotime('+7 days'));
             padding: 20px;
             border-radius: 15px;
             text-align: center;
+            position: relative;
         }
-        .measurement-value { font-size: 32px; font-weight: 700; margin: 10px 0; }
+        .measurement-value { font-size: 28px; margin: 10px 0; }
         .btn-measure {
             background: white;
             color: #667eea;
@@ -255,6 +243,40 @@ $fecha_default = date('Y-m-d\TH:i', strtotime('+7 days'));
             cursor: pointer;
             font-weight: 600;
             margin-top: 10px;
+            width: 100%;
+        }
+        .btn-measure:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+        .loading-spinner {
+            display: inline-block;
+            width: 16px;
+            height: 16px;
+            border: 3px solid rgba(102, 126, 234, 0.3);
+            border-top-color: #667eea;
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+        }
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        .status-indicator {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            background: rgba(255, 255, 255, 0.3);
+        }
+        .status-indicator.active {
+            background: #28a745;
+            animation: pulse 2s infinite;
+        }
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
         }
         .receta-item {
             background: #f8f9fa;
@@ -323,18 +345,20 @@ $fecha_default = date('Y-m-d\TH:i', strtotime('+7 days'));
                 <div class="form-grid">
                     <div class="form-group">
                         <div class="measurement-box">
+                            <div class="status-indicator" id="pesoStatus"></div>
                             <div style="font-size: 12px; opacity: 0.9;">PESO (kg)</div>
                             <div class="measurement-value" id="pesoDisplay">--</div>
-                            <button type="button" class="btn-measure" onclick="leerPeso()">⚖️ Leer Peso</button>
+                            <button type="button" class="btn-measure" id="btnPeso" onclick="leerPeso()">⚖️ Leer Peso</button>
                         </div>
                         <input type="hidden" name="peso" id="peso">
                     </div>
 
                     <div class="form-group">
                         <div class="measurement-box">
+                            <div class="status-indicator" id="saturacionStatus"></div>
                             <div style="font-size: 12px; opacity: 0.9;">SATURACIÓN (%)</div>
                             <div class="measurement-value" id="saturacionDisplay">--</div>
-                            <button type="button" class="btn-measure" onclick="leerSaturacion()">🫀 Leer Saturación</button>
+                            <button type="button" class="btn-measure" id="btnSaturacion" onclick="leerSaturacion()">🫀 Leer Saturación</button>
                         </div>
                         <input type="hidden" name="saturacion" id="saturacion">
                     </div>
@@ -390,39 +414,98 @@ $fecha_default = date('Y-m-d\TH:i', strtotime('+7 days'));
 </div>
 
 <script>
-const ESP32_PESO_URL = 'http://192.168.1.100/leer_peso';
-const ESP32_SATURACION_URL = 'http://192.168.1.100/leer_saturacion';
+// CONFIGURACIÓN ESP32
+const ESP32_IP = '192.168.1.100'; // CAMBIAR
+const ESP32_PESO_URL = `http://${ESP32_IP}/leer_peso`;
+const ESP32_SATURACION_URL = `http://${ESP32_IP}/leer_saturacion`;
+
+const PHP_LEER_PESO = 'esp32_leer_datos.php?tipo=peso';
+const PHP_LEER_SATURACION = 'esp32_leer_datos.php?tipo=saturacion';
+
+const USAR_CONSULTA_DIRECTA = true;
+const TIMEOUT_ESP32 = 10000;
+
+function consultarESP32(url) {
+    return Promise.race([
+        fetch(url, { method: 'GET', mode: 'cors', headers: { 'Content-Type': 'application/json' }}).then(r => r.json()),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout')), TIMEOUT_ESP32))
+    ]);
+}
 
 function leerPeso() {
-    document.getElementById('pesoDisplay').textContent = '⏳';
-    fetch(ESP32_PESO_URL)
-        .then(r => r.json())
-        .then(data => {
-            if (data.peso) {
-                document.getElementById('peso').value = data.peso;
-                document.getElementById('pesoDisplay').textContent = data.peso;
-            }
-        })
-        .catch(e => {
-            console.error(e);
-            document.getElementById('pesoDisplay').textContent = 'Error';
-        });
+    const btn = document.getElementById('btnPeso');
+    const display = document.getElementById('pesoDisplay');
+    const status = document.getElementById('pesoStatus');
+    const input = document.getElementById('peso');
+    
+    btn.disabled = true;
+    btn.innerHTML = '<span class="loading-spinner"></span> Leyendo...';
+    display.textContent = '⏳';
+    status.classList.add('active');
+    
+    const intentar = USAR_CONSULTA_DIRECTA ? consultarESP32(ESP32_PESO_URL) : fetch(PHP_LEER_PESO).then(r => r.json());
+    
+    intentar.then(data => {
+        if (data && data.peso) {
+            input.value = data.peso;
+            display.textContent = data.peso;
+        } else throw new Error('Inválido');
+    }).catch(() => {
+        if (USAR_CONSULTA_DIRECTA) {
+            fetch(PHP_LEER_PESO).then(r => r.json()).then(data => {
+                if (data.success && data.peso) {
+                    input.value = data.peso;
+                    display.textContent = data.peso;
+                } else {
+                    display.textContent = '❌';
+                }
+            });
+        } else {
+            display.textContent = '❌';
+        }
+    }).finally(() => {
+        btn.disabled = false;
+        btn.innerHTML = '⚖️ Leer Peso';
+        status.classList.remove('active');
+    });
 }
 
 function leerSaturacion() {
-    document.getElementById('saturacionDisplay').textContent = '⏳';
-    fetch(ESP32_SATURACION_URL)
-        .then(r => r.json())
-        .then(data => {
-            if (data.saturacion) {
-                document.getElementById('saturacion').value = data.saturacion;
-                document.getElementById('saturacionDisplay').textContent = data.saturacion + '%';
-            }
-        })
-        .catch(e => {
-            console.error(e);
-            document.getElementById('saturacionDisplay').textContent = 'Error';
-        });
+    const btn = document.getElementById('btnSaturacion');
+    const display = document.getElementById('saturacionDisplay');
+    const status = document.getElementById('saturacionStatus');
+    const input = document.getElementById('saturacion');
+    
+    btn.disabled = true;
+    btn.innerHTML = '<span class="loading-spinner"></span> Leyendo...';
+    display.textContent = '⏳';
+    status.classList.add('active');
+    
+    const intentar = USAR_CONSULTA_DIRECTA ? consultarESP32(ESP32_SATURACION_URL) : fetch(PHP_LEER_SATURACION).then(r => r.json());
+    
+    intentar.then(data => {
+        if (data && data.saturacion) {
+            input.value = data.saturacion;
+            display.textContent = data.saturacion + '%';
+        } else throw new Error('Inválido');
+    }).catch(() => {
+        if (USAR_CONSULTA_DIRECTA) {
+            fetch(PHP_LEER_SATURACION).then(r => r.json()).then(data => {
+                if (data.success && data.saturacion) {
+                    input.value = data.saturacion;
+                    display.textContent = data.saturacion + '%';
+                } else {
+                    display.textContent = '❌';
+                }
+            });
+        } else {
+            display.textContent = '❌';
+        }
+    }).finally(() => {
+        btn.disabled = false;
+        btn.innerHTML = '🫀 Leer Saturación';
+        status.classList.remove('active');
+    });
 }
 
 let recetaCount = 0;

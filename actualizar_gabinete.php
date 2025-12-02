@@ -45,6 +45,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $stmt->bind_param("ii", $nuevo_estado, $gabinete_id);
         $stmt->execute();
         $stmt->close();
+        
+        // ✅ NUEVO: Notificar al ESP32 que actualice el relay
+        notificarESP32Relay($gabinete_id);
     }
 
     // Redirigir de vuelta al dashboard
@@ -53,5 +56,42 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 } else {
     header("Location: dashboard.php");
     exit();
+}
+
+/**
+ * ✅ FUNCIÓN NUEVA: Notificar al ESP32 para que consulte el relay
+ * 
+ * Esta función hace una petición HTTP al ESP32 cuando se cambia el estado
+ * del relay UV en el dashboard. El ESP32 entonces consulta api_get_relay.php
+ * para obtener el nuevo estado y actualiza el GPIO correspondiente.
+ * 
+ * @param int $gabinete_id ID del gabinete cuyo relay cambió
+ * @return bool True si la notificación fue exitosa, false en caso contrario
+ */
+function notificarESP32Relay($gabinete_id) {
+    // ⚠️ IMPORTANTE: Ajustar esta IP según tu configuración
+    $ESP32_IP = '192.168.0.24';
+    $url = "http://{$ESP32_IP}/check_relay?gabinete_id={$gabinete_id}";
+    
+    // Usar cURL para hacer la petición al ESP32
+    $ch = curl_init();
+    curl_setopt($ch, CURLOPT_URL, $url);
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+    curl_setopt($ch, CURLOPT_TIMEOUT, 5); // Timeout de 5 segundos
+    curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, 3); // Timeout de conexión de 3 segundos
+    
+    $response = curl_exec($ch);
+    $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    $error = curl_error($ch);
+    curl_close($ch);
+    
+    // Log para debug (opcional, comentar en producción si no es necesario)
+    $logMsg = date('Y-m-d H:i:s') . " - Notificación ESP32 - Gabinete {$gabinete_id} - HTTP {$httpCode}";
+    if ($error) {
+        $logMsg .= " - Error: {$error}";
+    }
+    error_log($logMsg);
+    
+    return $httpCode == 200;
 }
 ?>

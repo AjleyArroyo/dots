@@ -23,7 +23,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $emergencia1 = trim($_POST['emergencia1'] ?? '');
     $emergencia2 = trim($_POST['emergencia2'] ?? '');
     
-    // NUEVOS CAMPOS
     $peso        = !empty($_POST['peso']) ? (float)$_POST['peso'] : null;
     $saturacion  = !empty($_POST['saturacion']) ? (int)$_POST['saturacion'] : null;
     $proxima_consulta = !empty($_POST['proxima_consulta']) ? $_POST['proxima_consulta'] : null;
@@ -31,11 +30,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if ($nombre === '' || $apellido === '' || $gabinete_id === 0 || $huella_id === 0) {
         $mensaje_error = "Por favor completa al menos: nombre, apellido, gabinete ID y huella ID.";
     } else {
-        // Iniciar transacción
         $con->begin_transaction();
         
         try {
-            // Insertar paciente
             $sql = "INSERT INTO patient 
                         (nombre, apellido, correo, telefono, gabinete_id, huella_id, emergencia1, emergencia2, peso_actual, saturacion_actual, estado_salud)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Nuevo')";
@@ -57,7 +54,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $paciente_id = $con->insert_id;
             $stmt->close();
 
-            // Si hay mediciones, guardar en historial
             if ($peso !== null && $saturacion !== null) {
                 $sqlMed = "INSERT INTO historial_mediciones (paciente_id, peso, saturacion, notas) 
                           VALUES (?, ?, ?, 'Registro inicial')";
@@ -67,7 +63,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $stmtMed->close();
             }
 
-            // Crear primera consulta programada
             if ($proxima_consulta) {
                 $sqlCon = "INSERT INTO consultas 
                           (paciente_id, me_personel_id, fecha_consulta, proxima_consulta, peso, saturacion, estado, notas) 
@@ -78,13 +73,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $stmtCon->execute();
                 $stmtCon->close();
 
-                // Crear alerta para próxima consulta
                 $sqlAlert = "INSERT INTO alertas_paciente 
                             (paciente_id, tipo, titulo, mensaje, fecha_programada, prioridad) 
                             VALUES (?, 'ConsultaProxima', 'Consulta Programada', 
                             CONCAT('Tiene una consulta programada para el ', ?), ?, 'Media')";
                 $stmtAlert = $con->prepare($sqlAlert);
-                // Calcular fecha de alerta (restar días de anticipación según config)
                 $stmtAlert->bind_param("iss", $paciente_id, $proxima_consulta, $proxima_consulta);
                 $stmtAlert->execute();
                 $stmtAlert->close();
@@ -101,10 +94,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 }
 
-// Obtener lista de gabinetes disponibles
 $gabinetes = $con->query("SELECT gabinete_id, nombre FROM gabinete ORDER BY gabinete_id ASC");
-
-// Fecha por defecto (próxima semana)
 $fecha_default = date('Y-m-d\TH:i', strtotime('+7 days'));
 ?>
 <!DOCTYPE html>
@@ -252,7 +242,7 @@ $fecha_default = date('Y-m-d\TH:i', strtotime('+7 days'));
             box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
         }
 
-        input:disabled {
+        input:disabled, input:read-only {
             background-color: #f5f5f5;
             cursor: not-allowed;
         }
@@ -269,12 +259,17 @@ $fecha_default = date('Y-m-d\TH:i', strtotime('+7 days'));
             padding: 20px;
             border-radius: 15px;
             text-align: center;
+            position: relative;
         }
 
         .measurement-value {
             font-size: 32px;
             font-weight: 700;
             margin: 10px 0;
+            min-height: 48px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
         }
 
         .measurement-label {
@@ -292,11 +287,56 @@ $fecha_default = date('Y-m-d\TH:i', strtotime('+7 days'));
             font-weight: 600;
             margin-top: 10px;
             transition: all 0.3s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            width: 100%;
         }
 
         .btn-measure:hover {
             transform: translateY(-2px);
             box-shadow: 0 5px 15px rgba(0, 0, 0, 0.2);
+        }
+
+        .btn-measure:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .loading-spinner {
+            display: inline-block;
+            width: 16px;
+            height: 16px;
+            border: 3px solid rgba(102, 126, 234, 0.3);
+            border-top-color: #667eea;
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        .status-indicator {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            background: rgba(255, 255, 255, 0.3);
+        }
+
+        .status-indicator.active {
+            background: #28a745;
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.5; transform: scale(1.1); }
         }
 
         .button-group {
@@ -418,8 +458,16 @@ $fecha_default = date('Y-m-d\TH:i', strtotime('+7 days'));
                         <label>
                             👆 ID Huella Digital <span class="required">*</span>
                         </label>
-                        <input type="number" name="huella_id" id="huella_id" required readonly>
-                        <div class="helper-text">Se leerá desde el sensor</div>
+                        <div class="measurement-box">
+                            <div class="status-indicator" id="huellaStatus"></div>
+                            <div class="measurement-label">HUELLA</div>
+                            <div class="measurement-value" id="huellaDisplay">--</div>
+                            <button type="button" class="btn-measure" id="btnLeerHuella" onclick="leerHuella()">
+                                👆 Leer Huella
+                            </button>
+                        </div>
+                        <input type="hidden" name="huella_id" id="huella_id" required>
+                        <div class="helper-text">Presione el botón y coloque el dedo en el sensor</div>
                     </div>
                 </div>
             </div>
@@ -430,18 +478,24 @@ $fecha_default = date('Y-m-d\TH:i', strtotime('+7 days'));
                 <div class="form-grid">
                     <div class="form-group">
                         <div class="measurement-box">
+                            <div class="status-indicator" id="pesoStatus"></div>
                             <div class="measurement-label">PESO (kg)</div>
                             <div class="measurement-value" id="pesoDisplay">--</div>
-                            <button type="button" class="btn-measure" onclick="leerPeso()">⚖️ Leer Peso</button>
+                            <button type="button" class="btn-measure" id="btnLeerPeso" onclick="leerPeso()">
+                                ⚖️ Leer Peso
+                            </button>
                         </div>
                         <input type="hidden" name="peso" id="peso">
                     </div>
 
                     <div class="form-group">
                         <div class="measurement-box">
+                            <div class="status-indicator" id="saturacionStatus"></div>
                             <div class="measurement-label">SATURACIÓN (%)</div>
                             <div class="measurement-value" id="saturacionDisplay">--</div>
-                            <button type="button" class="btn-measure" onclick="leerSaturacion()">🫀 Leer Saturación</button>
+                            <button type="button" class="btn-measure" id="btnLeerSaturacion" onclick="leerSaturacion()">
+                                🫀 Leer Saturación
+                            </button>
                         </div>
                         <input type="hidden" name="saturacion" id="saturacion">
                     </div>
@@ -493,53 +547,173 @@ $fecha_default = date('Y-m-d\TH:i', strtotime('+7 days'));
 </div>
 
 <script>
-// CONFIGURACIÓN ESP32
-const ESP32_PESO_URL = 'http://192.168.1.100/leer_peso';
-const ESP32_SATURACION_URL = 'http://192.168.1.100/leer_saturacion';
-const ESP32_HUELLA_URL = 'http://192.168.1.100/leer_huella';
+// =====================================================
+// CONFIGURACIÓN ESP32 - IGUAL QUE DOTSBOX.PHP
+// =====================================================
+const ESP32_IP = '192.168.0.24'; // CAMBIAR POR TU IP
+const ESP32_HUELLA_URL = `http://${ESP32_IP}/leer_huella`;
+const ESP32_PESO_URL = `http://${ESP32_IP}/leer_peso`;
+const ESP32_SATURACION_URL = `http://${ESP32_IP}/leer_saturacion`;
 
-// Leer peso desde ESP32
+// =====================================================
+// LEER HUELLA - MÉTODO SIMPLE COMO EN DOTSBOX
+// =====================================================
+function leerHuella() {
+    console.log('🔍 Leyendo huella...');
+    
+    const btn = document.getElementById('btnLeerHuella');
+    const display = document.getElementById('huellaDisplay');
+    const status = document.getElementById('huellaStatus');
+    const input = document.getElementById('huella_id');
+    
+    btn.disabled = true;
+    btn.innerHTML = '<span class="loading-spinner"></span> Leyendo...';
+    display.textContent = '⏳';
+    status.classList.add('active');
+    
+    // Llamar al ESP32 para leer huella
+    fetch(ESP32_HUELLA_URL)
+        .then(r => r.json())
+        .then(data => {
+            if (data && data.huella_id) {
+                console.log('✅ Huella leída:', data.huella_id);
+                input.value = data.huella_id;
+                display.textContent = '#' + data.huella_id;
+                
+                // Verificar si la huella ya existe
+                verificarHuellaExistente(data.huella_id);
+            } else {
+                throw new Error('No se pudo leer la huella');
+            }
+        })
+        .catch(error => {
+            console.error('Error:', error);
+            display.textContent = '❌';
+            alert('❌ No se pudo leer la huella. Verifique la conexión con el ESP32.');
+        })
+        .finally(() => {
+            btn.disabled = false;
+            btn.innerHTML = '👆 Leer Huella';
+            status.classList.remove('active');
+        });
+}
+
+// =====================================================
+// VERIFICAR SI HUELLA YA EXISTE
+// =====================================================
+function verificarHuellaExistente(huella_id) {
+    fetch(`verificar_huella.php?huella_id=${huella_id}`)
+        .then(r => r.json())
+        .then(check => {
+            if (check.existe) {
+                alert(`⚠️ Esta huella ya está asignada a: ${check.paciente}`);
+                document.getElementById('huella_id').value = '';
+                document.getElementById('huellaDisplay').textContent = '❌';
+            }
+        })
+        .catch(error => {
+            console.error('Error al verificar huella:', error);
+        });
+}
+
+// =====================================================
+// LEER PESO - MÉTODO SIMPLE COMO EN DOTSBOX
+// =====================================================
 function leerPeso() {
-    document.getElementById('pesoDisplay').textContent = '⏳';
+    console.log('⚖️ Leyendo peso...');
+    
+    const btn = document.getElementById('btnLeerPeso');
+    const display = document.getElementById('pesoDisplay');
+    const status = document.getElementById('pesoStatus');
+    const input = document.getElementById('peso');
+    
+    btn.disabled = true;
+    btn.innerHTML = '<span class="loading-spinner"></span> Leyendo...';
+    display.textContent = '⏳';
+    status.classList.add('active');
     
     fetch(ESP32_PESO_URL)
-        .then(response => response.json())
+        .then(r => r.json())
         .then(data => {
-            if (data.peso) {
-                document.getElementById('peso').value = data.peso;
-                document.getElementById('pesoDisplay').textContent = data.peso;
+            if (data && data.peso) {
+                console.log('✅ Peso leído:', data.peso);
+                input.value = data.peso;
+                display.textContent = data.peso + ' kg';
+            } else {
+                throw new Error('No se pudo leer el peso');
             }
         })
         .catch(error => {
             console.error('Error:', error);
-            document.getElementById('pesoDisplay').textContent = 'Error';
+            display.textContent = '❌';
+            alert('❌ No se pudo leer el peso. Verifique la conexión con el ESP32.');
+        })
+        .finally(() => {
+            btn.disabled = false;
+            btn.innerHTML = '⚖️ Leer Peso';
+            status.classList.remove('active');
         });
 }
 
-// Leer saturación desde ESP32
+// =====================================================
+// LEER SATURACIÓN - MÉTODO SIMPLE COMO EN DOTSBOX
+// =====================================================
 function leerSaturacion() {
-    document.getElementById('saturacionDisplay').textContent = '⏳';
+    console.log('🫀 Leyendo saturación...');
+    
+    const btn = document.getElementById('btnLeerSaturacion');
+    const display = document.getElementById('saturacionDisplay');
+    const status = document.getElementById('saturacionStatus');
+    const input = document.getElementById('saturacion');
+    
+    btn.disabled = true;
+    btn.innerHTML = '<span class="loading-spinner"></span> Leyendo...';
+    display.textContent = '⏳';
+    status.classList.add('active');
     
     fetch(ESP32_SATURACION_URL)
-        .then(response => response.json())
+        .then(r => r.json())
         .then(data => {
-            if (data.saturacion) {
-                document.getElementById('saturacion').value = data.saturacion;
-                document.getElementById('saturacionDisplay').textContent = data.saturacion + '%';
+            if (data && data.saturacion) {
+                console.log('✅ Saturación leída:', data.saturacion);
+                input.value = data.saturacion;
+                display.textContent = data.saturacion + '%';
+            } else {
+                throw new Error('No se pudo leer la saturación');
             }
         })
         .catch(error => {
             console.error('Error:', error);
-            document.getElementById('saturacionDisplay').textContent = 'Error';
+            display.textContent = '❌';
+            alert('❌ No se pudo leer la saturación. Verifique la conexión con el ESP32.');
+        })
+        .finally(() => {
+            btn.disabled = false;
+            btn.innerHTML = '🫀 Leer Saturación';
+            status.classList.remove('active');
         });
 }
 
-// Auto-leer huella al cargar
+// =====================================================
+// VALIDACIÓN DEL FORMULARIO
+// =====================================================
+document.getElementById('formPaciente').addEventListener('submit', function(e) {
+    const huella = document.getElementById('huella_id').value;
+    
+    if (!huella) {
+        e.preventDefault();
+        alert('⚠️ Por favor, lea la huella digital antes de continuar.');
+        document.getElementById('btnLeerHuella').focus();
+        return false;
+    }
+});
+
+// =====================================================
+// VERIFICAR CONEXIÓN AL CARGAR
+// =====================================================
 window.addEventListener('load', function() {
-    // Simular lectura de huella (reemplaza con tu lógica real)
-    setTimeout(function() {
-        // document.getElementById('huella_id').value = Math.floor(Math.random() * 1000);
-    }, 1000);
+    console.log('✅ Sistema cargado');
+    console.log('ESP32 URL:', ESP32_HUELLA_URL);
 });
 </script>
 

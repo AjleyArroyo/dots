@@ -577,10 +577,11 @@ include("dbconnection.php");
 
 <script>
 // CONFIGURACIÓN: URLs del ESP32
-const ESP32_HUELLA_URL = 'http://192.168.0.24/leer_huella';
-const ESP32_PESO_URL = 'http://192.168.0.24/leer_peso';
-const ESP32_SATURACION_URL = 'http://192.168.0.24/leer_saturacion';
-const ESP32_DISPENSAR_URL = 'http://192.168.0.24/dispensar';
+const ESP32_IP = '192.168.0.24'; // CAMBIAR POR TU IP
+const ESP32_HUELLA_URL = `http://${ESP32_IP}/leer_huella`;
+const ESP32_PESO_URL = `http://${ESP32_IP}/leer_peso`;
+const ESP32_SATURACION_URL = `http://${ESP32_IP}/leer_saturacion`;
+const ESP32_DISPENSAR_URL = `http://${ESP32_IP}/dispensar`;
 
 // Variables globales
 let pacienteActual = null;
