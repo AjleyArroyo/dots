@@ -64,6 +64,21 @@ $sqlAlertas = "SELECT * FROM alertas_paciente
                LIMIT 10";
 $resAlertas = $con->query($sqlAlertas);
 
+// **NUEVO: Obtener estadísticas de dispensaciones**
+$sqlDispensaciones = "SELECT 
+    COUNT(DISTINCT c.consulta_id) as total_consultas,
+    COUNT(DISTINCT CASE WHEN c.es_dotsbox = 1 THEN c.consulta_id END) as dispensaciones_dotsbox,
+    COUNT(DISTINCT CASE WHEN c.es_dotsbox = 0 THEN c.consulta_id END) as consultas_medico,
+    COUNT(DISTINCT ld.dispensacion_id) as total_dispensaciones_log,
+    MAX(ld.timestamp) as ultima_dispensacion
+    FROM patient p
+    LEFT JOIN consultas c ON p.paciente_id = c.paciente_id
+    LEFT JOIN log_dispensaciones ld ON p.paciente_id = ld.paciente_id
+    WHERE p.paciente_id = $paciente_id
+    GROUP BY p.paciente_id";
+$resDisp = $con->query($sqlDispensaciones);
+$dispensaciones = $resDisp->fetch_assoc();
+
 // Preparar datos para gráficas
 $labels = [];
 $pesos = [];
@@ -220,10 +235,67 @@ foreach($mediciones as $med) {
     .stat-number { font-size: 36px; font-weight: 700; margin-bottom: 5px; }
     .stat-label { font-size: 12px; opacity: 0.9; text-transform: uppercase; }
 
+    /* NUEVO: Estilos para contador de dispensaciones */
+    .dispensaciones-card {
+      background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+      color: white;
+      padding: 25px;
+      border-radius: 20px;
+      margin-bottom: 25px;
+      box-shadow: 0 10px 30px rgba(240, 147, 251, 0.4);
+    }
+
+    .dispensaciones-card h3 {
+      font-size: 18px;
+      margin-bottom: 20px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      opacity: 0.95;
+    }
+
+    .disp-stats-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 15px;
+    }
+
+    .disp-stat-item {
+      background: rgba(255, 255, 255, 0.2);
+      backdrop-filter: blur(10px);
+      padding: 15px;
+      border-radius: 12px;
+      text-align: center;
+    }
+
+    .disp-stat-number {
+      font-size: 32px;
+      font-weight: 700;
+      margin-bottom: 5px;
+    }
+
+    .disp-stat-label {
+      font-size: 11px;
+      opacity: 0.9;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .ultima-dispensacion {
+      margin-top: 15px;
+      padding-top: 15px;
+      border-top: 1px solid rgba(255, 255, 255, 0.3);
+      font-size: 13px;
+      text-align: center;
+      opacity: 0.9;
+    }
+
     .chart-container {
       position: relative;
       height: 300px;
-      margin-bottom: 25px;
+      background: white;
+      border-radius: 10px;
+      padding: 15px;
     }
 
     .tabs {
@@ -287,6 +359,7 @@ foreach($mediciones as $med) {
     .badge-realizada { background: #d4edda; color: #155724; }
     .badge-cancelada { background: #f8d7da; color: #721c24; }
     .badge-noasistio { background: #f8d7da; color: #721c24; }
+    .badge-dotsbox { background: #e3f2fd; color: #1976d2; }
 
     @media (max-width: 1200px) {
       .content-grid { grid-template-columns: 1fr; }
@@ -295,6 +368,7 @@ foreach($mediciones as $med) {
 
     @media (max-width: 768px) {
       .stats-grid { grid-template-columns: 1fr; }
+      .disp-stats-grid { grid-template-columns: 1fr; }
     }
   </style>
 </head>
@@ -311,7 +385,6 @@ foreach($mediciones as $med) {
       <a href="alertas.php?paciente_id=<?= $paciente_id ?>" class="btn btn-primary" style="background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);">
         🔔 Ver Alertas
         <?php
-        // Contar alertas pendientes del paciente
         $sqlCountAlertas = "SELECT COUNT(*) as total FROM alertas_paciente WHERE paciente_id = $paciente_id AND estado = 'Pendiente'";
         $resCountAlertas = $con->query($sqlCountAlertas);
         $countAlertas = $resCountAlertas->fetch_assoc()['total'];
@@ -393,6 +466,34 @@ foreach($mediciones as $med) {
         </div>
       </div>
 
+      <!-- NUEVO: Card de Dispensaciones -->
+      <div class="dispensaciones-card">
+        <h3>💊 Historial de Dispensaciones</h3>
+        <div class="disp-stats-grid">
+          <div class="disp-stat-item">
+            <div class="disp-stat-number"><?= $dispensaciones['total_consultas'] ?? 0 ?></div>
+            <div class="disp-stat-label">Total Consultas</div>
+          </div>
+          <div class="disp-stat-item">
+            <div class="disp-stat-number"><?= $dispensaciones['dispensaciones_dotsbox'] ?? 0 ?></div>
+            <div class="disp-stat-label">Dispensaciones DotsBox</div>
+          </div>
+          <div class="disp-stat-item">
+            <div class="disp-stat-number"><?= $dispensaciones['consultas_medico'] ?? 0 ?></div>
+            <div class="disp-stat-label">Consultas Médico</div>
+          </div>
+          <div class="disp-stat-item">
+            <div class="disp-stat-number"><?= $dispensaciones['total_dispensaciones_log'] ?? 0 ?></div>
+            <div class="disp-stat-label">Dispensaciones Log</div>
+          </div>
+        </div>
+        <?php if ($dispensaciones['ultima_dispensacion']): ?>
+        <div class="ultima-dispensacion">
+          🕐 Última dispensación: <?= date('d/m/Y H:i', strtotime($dispensaciones['ultima_dispensacion'])) ?>
+        </div>
+        <?php endif; ?>
+      </div>
+
       <!-- Gráficas -->
       <div class="card">
         <h2>📊 Evolución del Paciente</h2>
@@ -431,6 +532,7 @@ foreach($mediciones as $med) {
                 <th>Peso</th>
                 <th>Saturación</th>
                 <th>Estado</th>
+                <th>Tipo</th>
                 <th>Acciones</th>
               </tr>
             </thead>
@@ -442,6 +544,13 @@ foreach($mediciones as $med) {
                 <td><?= $c['peso'] ?? '-' ?> kg</td>
                 <td><?= $c['saturacion'] ?? '-' ?>%</td>
                 <td><span class="badge badge-<?= strtolower($c['estado']) ?>"><?= $c['estado'] ?></span></td>
+                <td>
+                  <?php if ($c['es_dotsbox'] == 1): ?>
+                    <span class="badge badge-dotsbox">🤖 DotsBox</span>
+                  <?php else: ?>
+                    <span class="badge" style="background: #e8f5e9; color: #2e7d32;">👨‍⚕️ Médico</span>
+                  <?php endif; ?>
+                </td>
                 <td>
                   <a href="ver_consulta.php?id=<?= $c['consulta_id'] ?>" class="btn btn-primary" style="padding: 5px 10px; font-size: 12px;">Ver</a>
                 </td>

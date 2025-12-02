@@ -473,7 +473,7 @@ if (empty($gabinetes)) {
       </div>
     </div>
 
-    <button class="logout-btn" onclick="location.href='logout.php'">🚪 Cerrar Sesión</button>
+    <button class="logout-btn" onclick="location.href='logout_php.php'">🚪 Cerrar Sesión</button>
   </div>
 
   <div class="main-content">
